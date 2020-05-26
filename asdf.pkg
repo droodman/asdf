@@ -1,0 +1,17 @@
+d 'asdf': module to estimate univariate, dynamic, stochastic models with analytical distributions
+d
+d asdf is a Stata estimation command. It is not yet polished:
+d it comes with no help file and performs no error checking.
+d
+d KW: stochastic differential equations
+d
+d Requires: Stata version 16 or later
+d
+d Author: David Roodman
+d Support: email david@@davidroodman.com
+d
+f asdf.ado
+f asdfSim.ado
+f asdf_p.ado
+f asdf.mata
+f lasdf.mlib
