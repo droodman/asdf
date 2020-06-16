@@ -56,7 +56,16 @@ program define asdf, eclass
 		local wgt  [`weight'=`wvar']
 		local wtype `weight'
 		local wexp `"=`exp'"'
+    qui markout `touse' `wvar'
 	}
+
+  tempname ti tf depvari depvarf
+  sum `tvar' if `touse', meanonly
+  scalar `ti' = r(min)
+  scalar `tf' = r(max)
+  sum `x' if `touse', meanonly
+  scalar `depvari' = r(min)
+  scalar `depvarf' = r(max)
 
   tempvar x0 tdelta prevobs
   qui if "`modeltype'" == "dynamic" {
@@ -127,7 +136,7 @@ program define asdf, eclass
     ml max, `mlopts' search(off)
   }
   
-	foreach retval in `fixedparams' {
+	foreach retval in `fixedparams' ti tf depvari depvarf {
 		ereturn scalar `retval' = ``retval''
 	}
 	foreach param in `params' {
