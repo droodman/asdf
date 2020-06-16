@@ -1,4 +1,4 @@
-*! adsf 0.1 23 May 2020
+*! adsf 0.1.1 23 May 2020
 *! Copyright (C) 2020 David Roodman
 
 // asdf: Analytical Stochastic Dynamic Framework

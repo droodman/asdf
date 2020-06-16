@@ -83,9 +83,9 @@ void asdfSim::sim() {
 		simStart(b :+ (X :* sqrt(edittozero(L,1))) * rnormal(rows(b), M, 0, 1), T/i)  // X :* sqrt(L) is sqrt(V) computed in way robust to V being singular, when estimation is constrained
 	}
 
-	Y  = J(Tsamp+1, 1, Yi)
+	Y  = J(Tsamp+(Tsamp > 1), 1, Yi)  // start each path at starting point, unless only final values requested
 
-	j = 2
+	j = 1 + (Tsamp > 1)
 	s = Tres - 1
 
 	for (; i; i--) {
