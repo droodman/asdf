@@ -28,7 +28,7 @@ program define asdfBernouNL
                         else local nlcomcmd `nlcomcmd' (notakeoffprob`if': 0                                      )
 
       local takeoffb0 `Y`if''^(1/[/gamma]) / exp([/lna]) / invgammap(-[/nu], .5)
-      if notakeoffprob`if'<.5 {
+      if `notakeoffprob`if''<.5 {
         local mediantakeoffeq cond([/b], -ln1m([/b]*`takeoffb0')/[/b], `takeoffb0')
         scalar `mediantakeoff`if'' = `mediantakeoffeq'
         local nlcomcmd `nlcomcmd' (mediantakeoff`if': `mediantakeoffeq' / `mediantakeoff`if'')
