@@ -30,7 +30,6 @@ program define asdf, eclass
 	}
 
 	syntax varlist(min=1 max=2 numeric) [pw fw aw iw/] [if] [in], model(string) [MODELType(string) CONSTraints(passthru) TECHnique(passthru) from(namelist min=1 max=1) lf(string) CLuster(passthru) Robust vce(passthru) *]
-	if `"`lf'"'=="" local lf 2
   if "`modeltype'"=="" local modeltype dynamic
   if !inlist("`modeltype'", "static", "dynamic") error 198
 
@@ -87,10 +86,11 @@ program define asdf, eclass
 
 	local _options `options'
 	local 0, `model'
-	syntax, [bernoudiff bernoudiff2 gbm bernounls]
+	syntax, [bernoudiff bernoudiff2 gbm bernounls stickyfeller]
 	local options `_options'
 
 	mata S = asdfEst`model'()
+	if `"`lf'"'=="" mata st_local("lf", strofreal(S.getlf()))
 
   if "`model'" == "bernounls" {
     mata S.setData("`modeltype'"=="dynamic"? st_data(., "`x0'", "`touse'") : st_numscalar("`x0'"), st_data(., "`x'" , "`touse'"), st_data(., "`tdelta'" , "`touse'") `=cond("`wtype'" != "", `", st_data(., "`wvar'" , "`touse'")"', "")')

@@ -239,6 +239,7 @@ pointer (real matrix) colvector asdfSimPaths(real scalar T, real scalar Tsamp, r
   return (&(S.t()) \ &(S.Y()) \ &(S.Yf()) \ &(S.Yq(Nq)) \ &Ys \ &YqObs)  // time, full path set, final path values, quantiles of full distribution, quantiles of provided observations
 }
 
+
 //
 // Estimator classes
 //
@@ -249,10 +250,13 @@ class asdfEst {  // SDE model with analytically expressible distribution
 	struct smatrix colvector params
 
 	struct smatrix colvector getParams()
+	real scalar getlf()
 	void setData()
 	virtual void lnPDF(), setFixedParam()
 	virtual string rowvector getParamEstNames(), getParamFixedNames()
 }
+
+real scalar asdfEst::getlf() return(2)  // default is that estimator is type lf2
 
 // _Y0, _Y, _tDelta = inital & final values, and time gaps
 void asdfEst::setData(real colvector _Y0, real colvector _Y, real colvector _tDelta) {
@@ -608,6 +612,69 @@ void asdfEstgbm::lnPDF(transmorphic vector params, real colvector lnf, | real sc
 	}
 }
 
+
+//
+// class for estimating sticky Feller
+//
+
+class asdfEststickyfeller extends asdfEst {
+	pointer (real colvector) scalar pb, plna, pnu, pmu, pY0, pY, ptDelta
+	class clsStickyFeller scalar S
+
+	void lnPDF(), setFixedParam(), getScalarParams(), getSmatrixParams(), setData()
+	string rowvector getParamEstNames(), getParamFixedNames()
+	real scalar getlf()
+	void new(), processParams()
+}
+
+real scalar asdfEststickyfeller::getlf() return(0)  // only an lf0 estimator
+
+// _Y0, _Y, _tDelta = inital & final values, and time gaps
+void asdfEststickyfeller::setData(real colvector Y0, real colvector Y, real colvector tDelta) {
+	pY0 = &Y0; pY  = &Y; ptDelta = &tDelta
+}
+
+string rowvector asdfEststickyfeller::getParamEstNames()
+	return (("lna", "b", "nu", "mu"))
+
+string rowvector asdfEststickyfeller::getParamFixedNames()
+	return ("")
+
+void asdfEststickyfeller::setFixedParam(string scalar name, numeric value) {}
+
+void asdfEststickyfeller::new()
+	params = smatrix(4,1)  // pre-allocated parameter vessel
+
+void asdfEststickyfeller::getScalarParams(real vector params) {
+	plna = &(params[1]); pb = &(params[2]); pnu = &(params[3]); pmu = &(params[4])
+}
+
+void asdfEststickyfeller::getSmatrixParams(struct smatrix vector params) {
+	plna = &(params[1].M); pb = &(params[2].M); pnu = &(params[3].M); pmu = &(params[4].M)
+}
+
+void asdfEststickyfeller::processParams(transmorphic vector params) {
+
+	if (eltype(params)=="real")
+		getScalarParams(params)
+	else
+		getSmatrixParams(params)
+}
+
+// log likelihoods and optionally, 1st & 2nd derivatives thereof
+void asdfEststickyfeller::lnPDF(transmorphic vector params, real colvector lnf, | real scalar todo, real matrix g, struct smatrix h) {
+	pragma unset todo; pragma unset g; pragma unset h
+	processParams(params)
+	lnf = S.lnStickyFeller(*ptDelta, *pY0, *pY, exp(*plna), *pb, *pnu, *pmu)
+/*"*ptDelta, *pY0, *pY"
+*ptDelta, *pY0, *pY
+"exp(*plna), *pb, *pnu, *pmu"
+exp(*plna), *pb, *pnu, *pmu
+"sum(lnf),missing(lnf)"
+ sum(lnf),missing(lnf)*/
+}
+
+
 // lf2 likelihood evaluator for all estimation classes
 // 1st argument is a moptimize() obect whose 1st userinfo item is the asdfEst obect
 function asdflf2(transmorphic scalar M, real scalar todo, real rowvector b, real colvector lnf, real matrix g, real matrix H) {
@@ -642,6 +709,14 @@ numeric rowvector asdfLogSumExp(numeric matrix x) {
 	shift = ln(maxdouble()/rows(x)) :- colmax(eltype(x)=="real"? x : Re(x))
 //	shift = shift - (shift:>0):*shift  // only downshift, to present overflow; shifting can prevent underflow & overflow but can also reduce precision if the shifter is much larger than entries
 	return (ln(quadcolsum(exp(x :+ shift))) - shift)
+}
+
+// sum pairs of numbers stored in logs, avoiding overflow, treating missing as log of 0
+real colvector asdfLogSumExpRow(real matrix x) {
+	real colvector shift
+	shift = ln(maxdouble()/cols(x)) :- rowmax(x)
+//	shift = shift - (shift:>0):*shift  // only downshift, to present overflow; shifting can prevent underflow & overflow but can also reduce precision if the shifter is much larger than entries
+	return (ln(quadrowsum(exp(x :+ shift))) - shift)
 }
 
 /*numeric colvector asdfLogRunningSumExp(numeric colvector x) {
@@ -897,7 +972,7 @@ real colvector lnPDFFeller(real colvector _nuv, real colvector lnlambdav, real c
 
 				_mstar = max((_c, mstar[i]))
 				lnPeakTerm = _mstar<1e5? _mstar *  lnxl - (lngamma(_mstar + nu + 1) + lngamma(_mstar + 1)) :  // use Stirling's approx for large m* because terms mostly cancel out
-				                         _mstar * (lnxl - (ln     (_mstar+nu      ) + ln     (_mstar    ))) - 1.d67f1c864beb4X+000 /*ln(2*pi())*/  +nu -.5*ln(_mstar) + ( -(nu+.5)*ln(_mstar+nu)) + (_mstar+_mstar)
+				                         _mstar * (lnxl - (ln     (_mstar+nu      ) + ln     (_mstar    ))) - 1.d67f1c864beb4X+000 /*ln(2*pi())*/  + nu -.5*ln(_mstar) + ( -(nu+.5)*ln(_mstar+nu)) + (_mstar+_mstar)
 				if (diffuse[i]==0) lnPeakTerm = lnPeakTerm - lnJ + lnK
 				termSums = lnPeakTerm \ termSums
 
@@ -1034,16 +1109,16 @@ real colvector lnPDFFeller(real colvector _nuv, real colvector lnlambdav, real c
 	zeros = lnxv:==.
 	masspoints = zeros :& _nuv :< 0 :& (!reflect :| round(_nuv):==(_nuv))
 	zeros = zeros :& masspoints:==0
-	if (zeros==1)  // if len(zeros)=len(masspoints)=max(len(nu),len(X))==1 then *all* (lambda-varying) obs have x=0
-		zeros = masspoints = .  // as a matrix index, means all rows
-	else {
+	if (zeros==1) {  // if len(zeros)=len(masspoints)=max(len(nu),len(X))==1 then *all* (lambda-varying) obs have x=0
+		zeros = .; masspoints = J(0,1,0)  // as a matrix index, . means all rows
+	} else {
 		zeros = selectindex(zeros)
 		if (cols(zeros)==0) zeros = J(0,1,0)
 		masspoints = selectindex(masspoints)
 		if (cols(masspoints)==0) masspoints = J(0,1,0)
 	}
-
 	N = zeros==.? rows(lnKv) : rows(zeros)
+
 	if (N) {  // x=0, but no mass point there
 		t = J(N, 1, .)
 		lnKv[zeros] = t
