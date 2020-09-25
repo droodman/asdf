@@ -666,12 +666,6 @@ void asdfEststickyfeller::lnPDF(transmorphic vector params, real colvector lnf, 
 	pragma unset todo; pragma unset g; pragma unset h
 	processParams(params)
 	lnf = S.lnStickyFeller(*ptDelta, *pY0, *pY, exp(*plna), *pb, *pnu, *pmu)
-/*"*ptDelta, *pY0, *pY"
-*ptDelta, *pY0, *pY
-"exp(*plna), *pb, *pnu, *pmu"
-exp(*plna), *pb, *pnu, *pmu
-"sum(lnf),missing(lnf)"
- sum(lnf),missing(lnf)*/
 }
 
 
@@ -702,7 +696,7 @@ function asdflf2(transmorphic scalar M, real scalar todo, real rowvector b, real
 }
 
 // sum columns of potentially negative numbers stored in logs, avoiding overflow, treating missing as log of 0
-numeric rowvector asdfLogSumExp(numeric matrix x) {
+numeric rowvector asdfquadLogSumExp(numeric matrix x) {
 	real rowvector shift
 	if (rows(x)==0) return(J(1,cols(x),0))
 	if (rows(x)==1) return(x)
@@ -711,6 +705,22 @@ numeric rowvector asdfLogSumExp(numeric matrix x) {
 	return (ln(quadcolsum(exp(x :+ shift))) - shift)
 }
 
+complex rowvector asdfLogSumExp(complex matrix x) {
+	real rowvector shift
+	if (rows(x)==0) return(J(1,cols(x),0))
+	if (rows(x)==1) return(x)
+	shift = ln(maxdouble()/rows(x)) :- colmax(Re(x))
+//	shift = shift - (shift:>0):*shift  // only downshift, to present overflow; shifting can prevent underflow & overflow but can also reduce precision if the shifter is much larger than entries
+	return (ln(colsum(exp(x :+ shift))) - shift)
+}
+
+/*complex colvector asdfLogRunningSumExp(complex colvector x) {
+	real scalar shift
+	if (rows(x)<=1) return(x)
+	shift = ln(maxdouble()/rows(x)) :- colmax(Re(x))
+	return (ln(quadrunningsum(exp(x :+ shift))) :- shift)
+}*/
+
 // sum pairs of numbers stored in logs, avoiding overflow, treating missing as log of 0
 real colvector asdfLogSumExpRow(real matrix x) {
 	real colvector shift
@@ -718,13 +728,6 @@ real colvector asdfLogSumExpRow(real matrix x) {
 //	shift = shift - (shift:>0):*shift  // only downshift, to present overflow; shifting can prevent underflow & overflow but can also reduce precision if the shifter is much larger than entries
 	return (ln(quadrowsum(exp(x :+ shift))) - shift)
 }
-
-/*numeric colvector asdfLogRunningSumExp(numeric colvector x) {
-	real scalar shift
-	if (rows(x)<=1) return(x)
-	shift = ln(maxdouble()/rows(x)) :- colmax(eltype(x)=="real"? x : Re(x))
-	return (ln(quadrunningsum(exp(x :+ shift))) :- shift)
-}*/
 
 // exponentiate a column, treating missing as log of 0
 real colvector asdfExpNegInfty(real colvector lnv) {
@@ -947,17 +950,17 @@ real colvector lnPDFFeller(real colvector _nuv, real colvector lnlambdav, real c
 						m = _c-1 :: 1; mnu = _c-1+nu :: 1+nu-.5
 						logRatios = (lnm=ln(m)) + ln(mnu)
 						cumLogRatios = quadrunningsum(logRatios, 1) - (1::_c-1) * lnxl
-						termSums = lnBaseTermc + asdfLogSumExp(cumLogRatios) \ termSums
+						termSums = lnBaseTermc + asdfquadLogSumExp(cumLogRatios) \ termSums
 						if (todo) {
 							_dnu  = cumLogRatios +      ln(C(t=digamma(mnu)))
 							_dlnx = cumLogRatios + (lnm = _c==2? . : lnm[|2\.|] \ .)
-							dTermSums = lnBaseTermc :+ (1.921fb54442d18X+001i /*pi i*/ + asdfLogSumExp(_dnu )  ,  // logs of nu derivatives
-													                                                 asdfLogSumExp(_dlnx)) \  // logs of x/lambda derivatives
+							dTermSums = lnBaseTermc :+ (1.921fb54442d18X+001i /*pi i*/ + asdfquadLogSumExp(_dnu )  ,  // logs of nu derivatives
+													                                                 asdfquadLogSumExp(_dlnx)) \  // logs of x/lambda derivatives
 													dTermSums
 							if (todo > 1)
-								ddTermSums = lnBaseTermc :+ (                                 asdfLogSumExp(cumLogRatios + ln(C(t:*t - trigamma(mnu))))  ,
-								                             1.921fb54442d18X+001i /*pi i*/ + asdfLogSumExp(_dnu         + lnm                        )  ,
-								                                                              asdfLogSumExp(_dlnx        + lnm                        )) \
+								ddTermSums = lnBaseTermc :+ (                                 asdfquadLogSumExp(cumLogRatios + ln(C(t:*t - trigamma(mnu))))  ,
+								                             1.921fb54442d18X+001i /*pi i*/ + asdfquadLogSumExp(_dnu         + lnm                        )  ,
+								                                                              asdfquadLogSumExp(_dlnx        + lnm                        )) \
                              ddTermSums
 						}
 					}
@@ -1003,18 +1006,18 @@ real colvector lnPDFFeller(real colvector _nuv, real colvector lnlambdav, real c
 						pSlnxl = &(M==_blockSize? Slnxl : Slnxl[|.\M|])
 						logRatios = (lnm=ln(m)) + ln(mnu)  // log of ratio of successive denominators in power series
 						cumLogRatios = quadrunningsum(logRatios) - *pSlnxl
-						termSums = (update = lnBaseTerm + asdfLogSumExp(cumLogRatios)) \ termSums
+						termSums = (update = lnBaseTerm + asdfquadLogSumExp(cumLogRatios)) \ termSums
 
 						if (todo) {
 							_dnu  = cumLogRatios + ln(t=digamma(mnu))
 							_dlnx = cumLogRatios + (lnm = M==1? ln(m-1) : lnm[|2\.|]\ln(m[M]-1))
-							dTermSums = lnBaseTerm + 1.921fb54442d18X+001i /*pi i*/ + asdfLogSumExp(_dnu ) ,  // logs of nu derivatives of sum of terms
-													lnBaseTerm                                  + asdfLogSumExp(_dlnx) \  // logs of x/lambda derivatives
+							dTermSums = lnBaseTerm + 1.921fb54442d18X+001i /*pi i*/ + asdfquadLogSumExp(_dnu ) ,  // logs of nu derivatives of sum of terms
+													lnBaseTerm                                  + asdfquadLogSumExp(_dlnx) \  // logs of x/lambda derivatives
                           dTermSums
 							if (todo > 1)
-								ddTermSums = lnBaseTerm                                 + asdfLogSumExp(cumLogRatios + ln(t:*t - trigamma(mnu))) ,
-														 lnBaseTerm + 1.921fb54442d18X+001i /*pi i*/+ asdfLogSumExp(_dnu         + lnm                     ) ,
-														 lnBaseTerm                                 + asdfLogSumExp(_dlnx        + lnm                     ) \
+								ddTermSums = lnBaseTerm                                 + asdfquadLogSumExp(cumLogRatios + ln(t:*t - trigamma(mnu))) ,
+														 lnBaseTerm + 1.921fb54442d18X+001i /*pi i*/+ asdfquadLogSumExp(_dnu         + lnm                     ) ,
+														 lnBaseTerm                                 + asdfquadLogSumExp(_dlnx        + lnm                     ) \
                              ddTermSums
 						}
             
@@ -1042,7 +1045,7 @@ real colvector lnPDFFeller(real colvector _nuv, real colvector lnlambdav, real c
 					pSlnxl = &(M==_blockSize? Slnxl : Slnxl[|.\M|])
 					logRatios = (lnm=ln(m)) + ln(mnu)  // log of ratio of successive denominators in power series
 					cumLogRatios = *pSlnxl - quadrunningsum(logRatios)
-					termSums = (update = lnBaseTerm + asdfLogSumExp(cumLogRatios)) \ termSums
+					termSums = (update = lnBaseTerm + asdfquadLogSumExp(cumLogRatios)) \ termSums
 					if (todo) {
 						if (m[M]>=epsilon(nu)) {
               mnu = m[1]+nu+1 :: m[M]+nu+1.5
@@ -1050,13 +1053,13 @@ real colvector lnPDFFeller(real colvector _nuv, real colvector lnlambdav, real c
             }
 						_dnu = cumLogRatios + ln(t=digamma(mnu))
 						_dlnx   = cumLogRatios + lnm
-						dTermSums = lnBaseTerm + 1.921fb54442d18X+001i /*pi i*/ + asdfLogSumExp(_dnu ) ,  // logs of nu derivatives
-												lnBaseTerm                                  + asdfLogSumExp(_dlnx) \  // logs of x/lambda derivatives
+						dTermSums = lnBaseTerm + 1.921fb54442d18X+001i /*pi i*/ + asdfquadLogSumExp(_dnu ) ,  // logs of nu derivatives
+												lnBaseTerm                                  + asdfquadLogSumExp(_dlnx) \  // logs of x/lambda derivatives
                         dTermSums
 							if (todo > 1)
-								ddTermSums = lnBaseTerm +                                  asdfLogSumExp(cumLogRatios + ln(t:*t - trigamma(mnu))) ,
-														 lnBaseTerm + 1.921fb54442d18X+001i /*pi i*/ + asdfLogSumExp(_dnu         + lnm                      ) ,
-														 lnBaseTerm +                                  asdfLogSumExp(_dlnx        + lnm                      ) \
+								ddTermSums = lnBaseTerm +                                  asdfquadLogSumExp(cumLogRatios + ln(t:*t - trigamma(mnu))) ,
+														 lnBaseTerm + 1.921fb54442d18X+001i /*pi i*/ + asdfquadLogSumExp(_dnu         + lnm                      ) ,
+														 lnBaseTerm +                                  asdfquadLogSumExp(_dlnx        + lnm                      ) \
                              ddTermSums
 					}
 
@@ -1071,14 +1074,14 @@ real colvector lnPDFFeller(real colvector _nuv, real colvector lnlambdav, real c
 				} while (1)
 			}  // end ascending power series
 
-			lnpowersum[i] = eltype(termSums)=="complex"? Re(asdfLogSumExp(termSums)) : asdfLogSumExp(termSums)
+			lnpowersum[i] = eltype(termSums)=="complex"? Re(asdfquadLogSumExp(termSums)) : asdfquadLogSumExp(termSums)
       t = bigarg[i]? 0 : lnpowersum[i]
 			if (todo) {
-				tc = Re(exp(asdfLogSumExp(dTermSums) :- t))  // log(deriv of log sum) = log(deriv of sum) - log sum
+				tc = Re(exp(asdfquadLogSumExp(dTermSums) :- t))  // log(deriv of log sum) = log(deriv of sum) - log sum
 				dnu [i] = _dnui  = tc[1]
 				dlnx[i] = _dlnxi = tc[2]
 				if (todo > 1) {
-					tc = Re(exp(asdfLogSumExp(ddTermSums) :- t))
+					tc = Re(exp(asdfquadLogSumExp(ddTermSums) :- t))
 					d2nu2  [i] = tc[1] - _dnui  * _dnui
 					d2nulnx[i] = tc[2] - _dnui  * _dlnxi
 					d2lnx2 [i] = tc[3] - _dlnxi * _dlnxi

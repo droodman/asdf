@@ -7,23 +7,35 @@ mata set mataoptimize on
 mata set matalnum off
 
 class clsStickyFeller {
-	real colvector m, lnm, B
+	real colvector lnStickyGreenTerm_m, lnStickyGreenTerm_lnm, lnUAsymParam_B, lnUAsymParam_kB
+	real colvector BesselKAsym_k, BesselKAsym_twokm1sq
+	pointer(real colvector) colvector lnUAsymParam_PT
 
 	real colvector lnStickyFeller()
-	pointer(real colvector) colvector PT
 	complex matrix lnStickyGreenTerm(), lnStickyGreen()
-	complex scalar lnUAsymParam(), hypergeomdiff()
+	complex scalar lnUAsymParam(), lnUAsymArg(), hypergeomdiff()
+	complex rowvector lnUAsymParamVector(), BesselKAsym()
 	void new()
 }
 
 void clsStickyFeller::new() {
-	m = 1::$M; lnm = ln(m)
+	lnStickyGreenTerm_m = 1::$M; lnStickyGreenTerm_lnm = ln(lnStickyGreenTerm_m)
+
+	BesselKAsym_k = 0::7  // 7 comes from using 1st 8 terms of series
+	BesselKAsym_twokm1sq = 2*BesselKAsym_k:-1; BesselKAsym_twokm1sq = BesselKAsym_twokm1sq :* BesselKAsym_twokm1sq
+	BesselKAsym_k = ln(8 * BesselKAsym_k)  // 8 comes from asymptotic formula
 
 	// B_i / i!, i=1 to 20, B-i = Bernoulli numbers
-	B = -1.0000000000000X-001 \ 1.5555555555555X-004 \ 0 \ -1.6c16c16c16c17X-00a \ 0 \ 1.1566abc011566X-00f \ 0 \ -1.bbd779334ef0bX-015 \ 0 \ 1.66a8f2bf70ebeX-01a \ 0 \ -1.22805d644267fX-01f \ 0 \ 1.d6db2c4e09163X-025 \ 0 \ -1.7da4e1f79955cX-02a \ 0 \ 1.355871d652e9eX-02f \ 0 \ -1.f57d968caacf1X-035 \ 0 \ 1.967e1f09c376fX-03a // (-1/2\ 1/6\ 0 \-1/30\ 0 \1/42\ 0 \-1/30\ 0 \5/66\ 0 \-691/2730\ 0 \7/6\ 0 \-3617/510\ 0 \43867/798\ 0 \-174611/330 \ 0 \ 854513/138) :/ factorial(1::22)
+	lnUAsymParam_B = -1.0000000000000X-001 \ 1.5555555555555X-004 \ 0 \ -1.6c16c16c16c17X-00a \ 0 \ 1.1566abc011566X-00f \ 0 \ -1.bbd779334ef0bX-015 \ 0 \ 1.66a8f2bf70ebeX-01a \ 0 \ -1.22805d644267fX-01f \ 0 \ 1.d6db2c4e09163X-025 \ 0 \ -1.7da4e1f79955cX-02a \ 0 \ 1.355871d652e9eX-02f \ 0 \ -1.f57d968caacf1X-035 \ 0 \ 1.967e1f09c376fX-03a \ 0 \ -1.39544646858125233407076862640635497639176366691109952378E-19 \ 0 \ 3.5347070396294674716932299778037992147245945647149203595069E-21 \ 0 \ -8.95351742703754685040261131811274105162713924278496251644E-23 \ 0 \ 2.2679524523376830603109507388681660632203543297441712610647E-24 // (-1/2\ 1/6\ 0 \-1/30\ 0 \1/42\ 0 \-1/30\ 0 \5/66\ 0 \-691/2730\ 0 \7/6\ 0 \-3617/510\ 0 \43867/798\ 0 \-174611/330 \ 0 \ 854513/138) :/ factorial(1::22)
+	lnUAsymParam_kB = lnUAsymParam_B[|2\.|] :* (1::rows(lnUAsymParam_B)-1) \ 0
 
 	// Pascal's triangle
-	PT = &(1\1) \ &(1\2\1) \ &(1\3\3\1) \ &(1\4\6\4\1) \ &(1\5\10\10\5\1) \ &(1\6\15\20\15\6\1) \ &(1\7\21\35\35\21\7\1) \ &(1\8\28\56\70\56\28\8\1) \ &(1\9\36\84\126\126\84\36\9\1) \ &(1\10\45\120\210\252\210\120\45\10\1)
+	lnUAsymParam_PT = &(1\1)
+	real matrix PT; real scalar s
+	PT = comb(2..20,0::20)
+	for (s=1;s<=20-2;s++)
+		lnUAsymParam_PT = lnUAsymParam_PT \ &(PT[|.,s\s+2,s|])
+//	lnUAsymParam_PT = &(1\1) \ &(1\2\1) \ &(1\3\3\1) \ &(1\4\6\4\1) \ &(1\5\10\10\5\1) \ &(1\6\15\20\15\6\1) \ &(1\7\21\35\35\21\7\1) \ &(1\8\28\56\70\56\28\8\1) \ &(1\9\36\84\126\126\84\36\9\1) \ &(1\10\45\120\210\252\210\120\45\10\1) \ &(1\11\55\165\330\462\462\330\165\55\11\1)
 }
 
 
@@ -31,6 +43,9 @@ void clsStickyFeller::new() {
 // assumes b < 0 and t,x,y have same height
 real colvector clsStickyFeller::lnStickyFeller(real colvector t, real colvector x, real colvector y, real scalar a, real scalar b, real scalar nu, real scalar mu) {
   real colvector _mu, lnp0, negbt, lnattilde, lnm, lnx, lny, zerofill, zeroind, missingfill, lnJacobian; complex rowvector u; complex matrix lambda
+
+	if (b >= 0 | nu < -1 | nu > 0 | a<=0)
+		return (.)
 
 	zerofill = J(length(zeroind = selectindex(y:==0)), 1, 0)
 	missingfill = J(length(zeroind), 1, .)
@@ -46,7 +61,7 @@ real colvector clsStickyFeller::lnStickyFeller(real colvector t, real colvector 
 	lnp0 = lnPDFFeller(nu, lnx - lnattilde, lny + lnJacobian, 0)  // absorbing transition density
 	if (rows(zerofill)) lnJacobian[zeroind] = zerofill
 	lnp0 = lnp0 + lnJacobian
-	if (mu == 0)
+	if (mu == 0 | nu == 0 | nu == -1)
 		return (lnp0)
 	if (rows(zerofill)) lnp0[zeroind] = missingfill  // if y=0, "absorbing term" drops out
 
@@ -65,38 +80,6 @@ real colvector clsStickyFeller::lnStickyFeller(real colvector t, real colvector 
 }
 
 
-// log Tricomi U for large a, dlmf.nist.gov/13.8.E11
-// optional argument lnM is a multiplier in logs, to be incorporated in order to conserve precision
-complex scalar clsStickyFeller::lnUAsymParam(complex scalar a, real scalar b, real scalar z, | complex scalar lnM) {
-  real colvector c; real scalar k, s, p, q, t1, t2, t3; complex scalar retval, term, C1, C2, as
-
-	k = 0
-	as = p = 1
-	c = (q = z/12 - b*.5) \ 1  // c_1 \ c_0 -- store c values backward
-
-	term = sqrt(a * z); term = C(term + term)
-	retval = (C1 = BesselK(b-1, term)) + (C2 = q * sqrt(z / a) * BesselK(b, term))
-	if (C1==0 & C2==0) return(C(.))
-	for (s=1; s<=10; s++) {
-		k = k + 2
-		t1 = b * B[|1\k+1|] + z * (1::k+1) :* B[|2\k+2|]
-		c = c ' t1[|.\k|] /  -k      \ c  // add two more terms to c
-		c = c ' t1        / -(k + 1) \ c
-
-		t1 = *PT[s] :* z :^ (s::0)  // since c is stored backward, run these sums s to 0
-		t2 = lngamma(s+2-b :: .5-b)
-		t3 = c[|1\s+2|] :/ exp(t2)
-
-		p = exp(t2[2]) * quadcross(t1, t3[|2\s+2|])
-		q = exp(t2[1]) * quadcross(t1, t3[|1\s+1|])
-
-		retval = retval + (term = (C1 * p + C2 * q) / (as = as * a))
-		if (abs(term/retval) < 1e-15) break
-	}
-	return (1.62e42fefa39efX-001 /*ln(2)*/ + (1 - b)*.5 * ln(z/a) + z*.5 + (editmissing(lnM,0) - lngamma(a)) + ln(retval))
-}
-
-
 // Compute sticky term of sticky Feller Green function for b<0. rows(lambda) must be max(rows(x),rows(y)) and rows(x) and rows(y) must each be that or 1
 // accepts optional pre-computed ln(x), ln(y)
 complex matrix clsStickyFeller::lnStickyGreenTerm(complex matrix lambda, real colvector x, real colvector y, real scalar a, real scalar b, real scalar nu, real scalar mu, | real colvector lnx, real colvector lny) {
@@ -106,7 +89,7 @@ complex matrix clsStickyFeller::lnStickyGreenTerm(complex matrix lambda, real co
 	real matrix powerx, powery
 	complex scalar lnC, lnM, _alpha, _alphamnu, lngammaalphamnu
 
-	powerxj = rowsum(powerx = abs(lambda :* (x/a)) :< 50)  // which entries to compute using with power series vs. asymptotic
+	powerxj = rowsum(powerx = abs(lambda :* (x/a)) :< 50)  // which entries to compute using with power series vs. asymptotic. Notably, twice this value will be fed into BesselK, where Zhang and Jin use cut-off of just 9 for asymptotic series. Should this threshold go as low as 4.5?
 	poweryj = rowsum(powery = abs(lambda :* (y/a)) :< 50)
 	alpha = lambda / -b
 	lngammanegnu = lngamma(-nu)
@@ -117,8 +100,8 @@ complex matrix clsStickyFeller::lnStickyGreenTerm(complex matrix lambda, real co
 	if (rows(lnx) == 0) lnx = ln(x)
 	if (rows(lny) == 0) lny = ln(y)
 
-	t1 = ln(onepnu :: $M.5 + nu) + lnm  // faster than ln(nu :+ m)
-	t2 = ln(1 - nu :: $M.5 - nu) + lnm
+	t1 = ln(onepnu :: $M.5 + nu) + lnStickyGreenTerm_lnm  // faster than ln(nu :+ lnStickyGreenTerm_m)
+	t2 = ln(1 - nu :: $M.5 - nu) + lnStickyGreenTerm_lnm
 
 	if (rowsx == 1) {
 		lnxnu = nu * lnx
@@ -164,13 +147,13 @@ complex matrix clsStickyFeller::lnStickyGreenTerm(complex matrix lambda, real co
 			_alpha = alpha[j,i]; _alphamnu = _alpha - nu; lngammaalphamnu = lngamma(_alphamnu)
 			lnC = _lnC + (lngammaalphamnu - lngamma(_alpha))
 			if (powers = powerx[j,i] + powery[j,i]) {
-				numer1 = ln((_alpha    - 1) :+ m)
-				numer2 = ln((_alphamnu - 1) :+ m)
+				numer1 = ln((_alpha    - 1) :+ lnStickyGreenTerm_m)
+				numer2 = ln((_alphamnu - 1) :+ lnStickyGreenTerm_m)
 			}
 			if (powers < 2)
 				lnM = lngammaalphamnu - lngammanegnu
-			alpha[j,i] = (lnxnu == .? 0 : (powerx[j,i]? hypergeomdiff(numer1 + denomx1, lnC - lnxnu, numer2 + denomx2) : lnUAsymParam(_alpha, onepnu, bax, lnM))) + 
-			             (lnynu == .? 0 : (powery[j,i]? hypergeomdiff(numer1 + denomy1, lnC - lnynu, numer2 + denomy2) : lnUAsymParam(_alpha, onepnu, bay, lnM))) -
+			alpha[j,i] = (lnxnu == .? 0 : (powerx[j,i]? hypergeomdiff(numer1 + denomx1, lnC - lnxnu, numer2 + denomx2) : lnUAsymParam(_alpha, onepnu, bax)+lnM)) + 
+			             (lnynu == .? 0 : (powery[j,i]? hypergeomdiff(numer1 + denomy1, lnC - lnynu, numer2 + denomy2) : lnUAsymParam(_alpha, onepnu, bay)+lnM)) -
 			               ln(lambda[j,i] / mu - nu * exp(lnC))
 		}
 	}
@@ -189,65 +172,98 @@ complex scalar clsStickyFeller::hypergeomdiff(complex colvector x1, complex scal
 }
 
 
-// Compute Bessel K with power series or asymptotic formula for small order (here, -1<nu<1 ASSUMED) and complex argument z
-// threshold and index bounds from Zhang and Jin's CIKVB @ people.sc.fsu.edu/~jburkardt/f_src/special_functions/special_functions.f90
-// except that power series stops at 22 instead of 50, as in worst case (z=9,nu=-.001), this still assures last term is at machine tolerance
-// for each row of z, makes a temporary matrix with 23 rows and a column for each row entry with |z|<9, so inefficient if z is very wide
-complex matrix BesselK(real scalar nu, complex matrix z) {
-  real scalar twonu, K, i, r
-	real rowvector k, twokm1, Re_lnz, power, asymp
-  real colvector fortyfour2zero, InuDenom, InegnuDenom, lna, z22
-  real matrix _power
-  complex scalar lnhalfz, nulnhalfz, twomlnhalfz
-  complex rowvector _lnz, _z
-  complex matrix lnz, terms
+// log Tricomi U for large a, dlmf.nist.gov/13.8.E11
+complex scalar clsStickyFeller::lnUAsymParam(complex scalar a, real scalar b, real scalar z) {
+  real colvector c, bzlnUAsymParam_B; real scalar k, s, q, t1, t2, t3, zs; complex scalar retval, term, lnterm, C1, C2, as, zdiva
 
-  lnz = ln(z)  // *** also using lnz for return value, to avoid allocating twice
-  _power = Re(lnz) :< 2.197224577 /* ln 9 */  // abs(z) < 9?
+	as = 1; zs = k = 1
+	zdiva = z / a
+	c = (q = z/12 - b*.5) \ 1  // c_1 \ c_0 -- store c values backward
+	bzlnUAsymParam_B = (-b) * lnUAsymParam_B - z * lnUAsymParam_kB
 
-  z22 = 0::22  // stuff for power series
-  (InuDenom    = ln(( nu::22.5+nu) :* z22))[1] = lngamma(1+nu); _quadrunningsum(   InuDenom,    InuDenom)
-  (InegnuDenom = ln((-nu::22.5-nu) :* z22))[1] = lngamma(1-nu); _quadrunningsum(InegnuDenom, InegnuDenom)
-  fortyfour2zero = z22 * 2
+	term = sqrt(a * z); term = C(term + term)
+	lnterm = ln(term)
+	retval = (C1 = BesselKAsym(b-1, term, lnterm)) + (C2 = q * sqrt(zdiva) * BesselKAsym(b, term, lnterm))
+	if (C1==0 & C2==0) return(C(.))
 
-  if (nu != -.5 & nu!= -.5) {  // stuff for asymptotic series
-  	k = 0::14; twokm1 = 2*k:-1
-    twonu = nu + nu
-    lna = ln((twonu*twonu :- twokm1:*twokm1) :/ k) :- 1.0a2b23f3bab73X+001 /*ln 8*/  // log of a_k coefficients
-  }
+	for (s=1; s<=10; s++) {
+		t1 = bzlnUAsymParam_B[|.\++k|]
+		c =  c          ' t1                  / k \ c  // add two more terms to c
+		t1 = c[|.\k++|] ' t1
+		c = (t1 + c[k] * bzlnUAsymParam_B[k]) / k \ c
 
-  for (r=rows(z);r;r--) {
-    power = _power[r,]; asymp = selectindex(1 :- power); power = selectindex(power)
-    if (length(power)) {
-      lnhalfz = lnz[r,power] :- 1.62e42fefa39efX-001 /*ln .5*/
-      nulnhalfz = nu * lnhalfz
-      twomlnhalfz = fortyfour2zero * lnhalfz
-      lnz[r,power] = 1.921fb54442d18X+000 /*pi/2*/ / sin(nu*pi()) * quadcolsum(exp(twomlnhalfz :- nulnhalfz :- InegnuDenom) - exp(nulnhalfz :+ twomlnhalfz :- InuDenom))
-    }
-    if (length(asymp))
-      if (nu == -.5 | nu == .5) {  // only first term is non-zero
-        _z = z[r,asymp]
-        lnz[r,asymp] = sqrt(1.921fb54442d18X+000 /*pi/2*/ :/ _z) :/ exp(_z)
-      } else {
-        _lnz = lnz[r,asymp]
-        (terms = lna :- J(15, 1, _lnz))[1,] = 1.ce6bb25aa1315X-003 /*.5*ln(pi/2)*/ :- (.5*_lnz + z[r,asymp])  // log of first term, including outer multiplier, which is sqrt(pi/2z)*exp(-z)
-        Re_lnz = Re(_lnz)
-        for (i=cols(asymp);i;i--) {
-          K = Re_lnz[i]; K = K < 1.c715a530ff3c5X+001 /*ln 35*/ ? 14 : (K < 1.f4bd2b7ac1bafX+001 /*ln 50*/ ? 10 : 8)
-          lnz[r,asymp[i]] = quadcolsum(exp(quadrunningsum(terms[|.,i\K,i|], 1)))
-        }
-      }
-  }
-  return(lnz)
+		t1 = *lnUAsymParam_PT[s] :* (zs = zs[1]*z \ zs)  // since c is stored backward, run these sums s to 0
+		t3 = c[|.\s+2|] :/ (t2 = exp(lngamma(s+2-b :: .5-b)))  // exp(lngamma()) faster than gamma()!
+		retval = retval + (term = (C1 * t2[2] * cross(t1, t3[|2\s+2|]) +  // note that "a" only enters math in this loop starting here, and that only in C1, C2, and "as"
+		                           C2 * t2[1] * cross(t1, t3[|.\s+1|])   ) / (as = as * a))
+
+		if (abs(term/retval) < 1e-15) break
+	}
+	return (1.62e42fefa39efX-001 /*ln(2)*/ + (1 - b)*.5 * ln(zdiva) + z*.5 + ln(retval) - lngamma(a))
+}
+
+// log Tricomi U for large a, dlmf.nist.gov/13.8.E11
+complex rowvector clsStickyFeller::lnUAsymParamVector(complex rowvector a, real scalar b, real scalar z) {
+  real colvector c, bzlnUAsymParam_B; real rowvector p, q; real scalar k, s, _q, t1, t2, t3, zs; complex rowvector retval, term, lnterm, C1, C2, zdiva; complex matrix as
+
+	p = q = J(1,11,0)
+	zs = k = 1
+	zdiva = z :/ a
+	c = (_q = z/12 - b*.5) \ 1  // c_1 \ c_0 -- store c values backward
+	bzlnUAsymParam_B = (-b) * lnUAsymParam_B - z * lnUAsymParam_kB
+
+	term = sqrt(a * z); term = C(term + term)
+	lnterm = ln(term)
+	retval = (C1 = BesselKAsym(b-1, term, lnterm)) + (C2 = _q * sqrt(zdiva) :* BesselKAsym(b, term, lnterm))
+
+	for (s=1; s<=11; s++) {
+		t1 = bzlnUAsymParam_B[|.\++k|]
+		c =  c          ' t1                  / k \ c  // add two more terms to c
+		t1 = c[|.\k++|] ' t1
+		c = (t1 + c[k] * bzlnUAsymParam_B[k]) / k \ c
+
+		t1 = *lnUAsymParam_PT[s] :* (zs = zs[1]*z \ zs)  // since c is stored backward, run these sums s to 0
+		t3 = c[|.\s+2|] :/ (t2 = exp(lngamma(s+2-b :: .5-b)))  // exp(lngamma()) faster than gamma()!
+		p[s] = t2[2] * cross(t1, t3[|2\s+2|])
+		q[s] = t2[1] * cross(t1, t3[|.\s+1|])
+	}
+	
+	as = exp((-1::-11) * ln(a))  // a^-s
+	return ((1.62e42fefa39efX-001 /*ln(2)*/  + z*.5) :+ (1 - b)*.5 * ln(zdiva) + ln(retval + C1 :* p * as + C2 :* q * as) :- lngamma(a))
+}
+
+
+// log Tricomi U for large z, dlmf.nist.gov/13.7.E3
+// takes ln z instead of z
+complex scalar clsStickyFeller::lnUAsymArg(complex scalar a, real scalar b, real scalar lnz) {
+	real colvector s; complex colvector terms
+	s = -1::8  // 10 terms is made-up; can be precomputed; or need to iterate and check for explosion?
+	(terms = ln(s :+ a) + ln(s :+ (a - b + 1)) - editmissing(ln(s),0) - (s:+1) * (1.921fb54442d18X+001i /*pi i*/ + lnz))[1] =  - a * lnz
+	return (asdfLogSumExp(runningsum(terms)))
+}
+
+
+// Compute Bessel K with asymptotic formula for small order (here, -1<nu<1 ASSUMED) and complex argument z
+// max series length index bounds from Zhang and Jin's CIKVB @ people.sc.fsu.edu/~jburkardt/f_src/special_functions/special_functions.f90
+// *** This code only takes first 8 terms of series, which they recommend for abs(z) > 50.
+complex rowvector clsStickyFeller::BesselKAsym(real scalar nu, complex rowvector z, complex rowvector lnz) {
+  real scalar twonu, i; complex matrix terms; complex rowvector retval
+
+  if (nu == -.5 | nu == .5)   // only first term is non-zero
+		return (1.40d931ff62705X+000 /*sqrt(pi/2)*/ :/ (sqrt(z) :* exp(z)))
+
+	twonu = nu + nu
+	(terms = J(1, cols(z), ln(twonu*twonu :- BesselKAsym_twokm1sq) :- BesselKAsym_k) :- lnz)[1,] = (-.5) * lnz - z  // log of first term, including outer multiplier exp(-z)
+	if (cols(z)==1)
+		return (    1.40d931ff62705X+000 /*sqrt(pi/2)*/ * colsum(exp(runningsum(terms   , 1))))
+
+	retval = J(1, cols(z), C(.))
+	for (i=cols(z);i;i--)
+		retval[i] = 1.40d931ff62705X+000 /*sqrt(pi/2)*/ * colsum(exp(runningsum(terms[,i], 1)))
+	return (retval)	
 }
 
 mata mlib create lasdfStickyFeller, dir("`c(sysdir_plus)'l") replace
 mata mlib add lasdfStickyFeller *(), dir("`c(sysdir_plus)'l")
 mata mlib index
 end
-
-mata S = clsStickyFeller()
-mata lambda = 149.296316 - 26.7813598i,139.764101 - 80.3440794i,120.699671 - 133.906799i,92.1030264 - 187.469519i,53.9741666 - 241.032238i,6.31309188 - 294.594958i,50.8801978 - 348.157677i,117.605702 - 401.720397i,193.863422 - 455.283117i,279.653356 - 508.845836i,374.975506 - 562.408556i,-479.82987 - 615.971275i,-594.21645 - 669.533995i,718.135244 - 723.096715i,851.586253 - 776.659434i,994.569477 - 830.222154i,1147.08492 - 883.784873i,1309.13257 - 937.347593i,1480.71244 - 990.910313i,1661.82452 - 1044.47303i,1852.46882 - 1098.03575i,2052.64534 - 1151.59847i,2262.35407 - 1205.16119i,2481.59501 - 1258.72391i,2710.36817 - 1312.28663i,2948.67354 - 1365.84935i,3196.51113 - 1419.41207i,3453.88093 - 1472.97479i
-mata S.lnStickyGreenTerm(lambda   ,1.5e353f7ced917X-003,1.b4395810624ddX-003,1.1392176df3ec5X+000,-1.42cddd6e04c06X+003,-1.ab7c63fead19bX-002,1.b06a897635e74X+004,-1.c41e964dc9213X+000,-1.8be501affa053X+000)[1]
-mata S.lnStickyGreenTerm(lambda[1],1.5e353f7ced917X-003,1.b4395810624ddX-003,1.1392176df3ec5X+000,-1.42cddd6e04c06X+003,-1.ab7c63fead19bX-002,1.b06a897635e74X+004,-1.c41e964dc9213X+000,-1.8be501affa053X+000)
-
