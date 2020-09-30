@@ -714,12 +714,12 @@ complex rowvector asdfLogSumExp(complex matrix x) {
 	return (ln(colsum(exp(x :+ shift))) - shift)
 }
 
-/*complex colvector asdfLogRunningSumExp(complex colvector x) {
+complex colvector asdfLogRunningSumExp(complex colvector x) {
 	real scalar shift
 	if (rows(x)<=1) return(x)
 	shift = ln(maxdouble()/rows(x)) :- colmax(Re(x))
-	return (ln(quadrunningsum(exp(x :+ shift))) :- shift)
-}*/
+	return (ln(runningsum(exp(x :+ shift))) :- shift)
+}
 
 // sum pairs of numbers stored in logs, avoiding overflow, treating missing as log of 0
 real colvector asdfLogSumExpRow(real matrix x) {
