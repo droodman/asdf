@@ -86,7 +86,7 @@ program define asdf, eclass
 
 	local _options `options'
 	local 0, `model'
-	syntax, [bernoudiff bernoudiff2 gbm bernounls stickyfeller]
+	syntax, [bernoudiff bernoudiff2 gbm bernounls stickyfeller stickysqbessel]
 	local options `_options'
 
 	mata S = asdfEst`model'()

@@ -249,7 +249,7 @@ class asdfEst {  // SDE model with analytically expressible distribution
 	real colvector lnY0, lnY, tDelta, tDelta2, zeroind, zerofill
 	struct smatrix colvector params
 
-	struct smatrix colvector getParams()
+	virtual struct smatrix colvector getParams()
 	real scalar getlf()
 	void setData()
 	virtual void lnPDF(), setFixedParam()
@@ -277,8 +277,8 @@ class asdfEstbernounls extends asdfEst {
   real rowvector b
   real matrix V
 
-	void Estimate(), setData(), d2()
-  string rowvector getParamEstNames()
+	void Estimate(), d2(), setData()
+  virtual string rowvector getParamEstNames()
 }
 
 string rowvector asdfEstbernounls::getParamEstNames()
@@ -366,9 +366,9 @@ class asdfEstbernoudiff extends asdfEst {
 	pointer (real colvector) scalar pb, plna, pnu, pgamma, psigma2
 	real colvector bt, lnlambda, lnx, lnC, lnX0, lnX, dlnlambdadgamma, dlnxdgamma, bdivexpm1bt
 
-	virtual void lnPDF(), setFixedParam(), getScalarParams(), getSmatrixParams(), transformGradient()
+	virtual void lnPDF(), setFixedParam(), getScalarParams(), getSmatrixParams(), transformGradient(), processParams()
 	virtual string rowvector getParamEstNames(), getParamFixedNames()
-	void new(), processParams()
+	void new()
   real colvector CDF(), invCDF()
 }
 
@@ -520,7 +520,7 @@ class asdfEstbernoudiff2 extends asdfEstbernoudiff {
 
 	virtual string rowvector getParamEstNames()
 	virtual void getScalarParams(), getSmatrixParams(), transformGradient()
-	void transformParams()
+	virtual void transformParams()
 }
 
 string rowvector asdfEstbernoudiff2::getParamEstNames()
@@ -563,9 +563,9 @@ class asdfEstgbm extends asdfEst {
 	real colvector a
 	pointer (real colvector) scalar pb
 
-	virtual void lnPDF(), setFixedParam(), CDF()
+	virtual void lnPDF(), setFixedParam(), CDF(), getScalarParams(), getSmatrixParams()
 	virtual string rowvector getParamEstNames(), getParamFixedNames()
-	void new(), getScalarParams(), getSmatrixParams()
+	void new()
 }
 
 void asdfEstgbm::new() params = smatrix(2,1)  // pre-allocated parameter vessel
@@ -618,13 +618,13 @@ void asdfEstgbm::lnPDF(transmorphic vector params, real colvector lnf, | real sc
 //
 
 class asdfEststickyfeller extends asdfEst {
-	pointer (real colvector) scalar pb, plna, pnu, pmu, pY0, pY, ptDelta
+	pointer (real colvector) scalar pb, plna, pnu, plnmu, pY0, pY, ptDelta
 	class clsStickyFeller scalar S
 
-	void lnPDF(), setFixedParam(), getScalarParams(), getSmatrixParams(), setData()
-	string rowvector getParamEstNames(), getParamFixedNames()
+	void new(), setData()
+	virtual void lnPDF(), setFixedParam(), getScalarParams(), getSmatrixParams(), processParams()
+	virtual string rowvector getParamEstNames(), getParamFixedNames()
 	real scalar getlf()
-	void new(), processParams()
 }
 
 real scalar asdfEststickyfeller::getlf() return(0)  // only an lf0 estimator
@@ -635,7 +635,7 @@ void asdfEststickyfeller::setData(real colvector Y0, real colvector Y, real colv
 }
 
 string rowvector asdfEststickyfeller::getParamEstNames()
-	return (("lna", "b", "nu", "mu"))
+	return (("lna", "b", "nu", "lnmu"))
 
 string rowvector asdfEststickyfeller::getParamFixedNames()
 	return ("")
@@ -646,26 +646,52 @@ void asdfEststickyfeller::new()
 	params = smatrix(4,1)  // pre-allocated parameter vessel
 
 void asdfEststickyfeller::getScalarParams(real vector params) {
-	plna = &(params[1]); pb = &(params[2]); pnu = &(params[3]); pmu = &(params[4])
+	plna = &(params[1]); pb = &(params[2]); pnu = &(params[3]); plnmu = &(params[4])
 }
 
 void asdfEststickyfeller::getSmatrixParams(struct smatrix vector params) {
-	plna = &(params[1].M); pb = &(params[2].M); pnu = &(params[3].M); pmu = &(params[4].M)
+	plna = &(params[1].M); pb = &(params[2].M); pnu = &(params[3].M); plnmu = &(params[4].M)
 }
 
 void asdfEststickyfeller::processParams(transmorphic vector params) {
-
 	if (eltype(params)=="real")
 		getScalarParams(params)
 	else
 		getSmatrixParams(params)
 }
 
-// log likelihoods and optionally, 1st & 2nd derivatives thereof
 void asdfEststickyfeller::lnPDF(transmorphic vector params, real colvector lnf, | real scalar todo, real matrix g, struct smatrix h) {
 	pragma unset todo; pragma unset g; pragma unset h
 	processParams(params)
-	lnf = S.lnStickyFeller(*ptDelta, *pY0, *pY, exp(*plna), *pb, *pnu, *pmu)
+	lnf = S.lnStickyFeller(*ptDelta, *pY0, *pY, exp(*plna), *pb, *pnu, exp(*plnmu))
+}
+
+
+//
+// class for sticky squared Bessel, as special case of sticky Feller
+//
+
+class asdfEststickysqbessel extends asdfEststickyfeller {
+	void new()
+	virtual void getScalarParams(), getSmatrixParams()
+	virtual string rowvector getParamEstNames()
+}
+
+string rowvector asdfEststickysqbessel::getParamEstNames()
+	return (("nu", "lnmu"))
+
+void asdfEststickysqbessel::new() {
+	params = smatrix(2,1)  // pre-allocated parameter vessel
+	plna = &1.62e42fefa39efX-001 /*ln 2*/
+	pb = &0
+}
+
+void asdfEststickysqbessel::getScalarParams(real vector params) {
+	pnu = &(params[1]); plnmu = &(params[2])
+}
+
+void asdfEststickysqbessel::getSmatrixParams(struct smatrix vector params) {
+	pnu = &(params[1].M); plnmu = &(params[2].M)
 }
 
 
@@ -705,21 +731,6 @@ numeric rowvector asdfquadLogSumExp(numeric matrix x) {
 	return (ln(quadcolsum(exp(x :+ shift))) - shift)
 }
 
-complex rowvector asdfLogSumExp(complex matrix x) {
-	real rowvector shift
-	if (rows(x)==0) return(J(1,cols(x),0))
-	if (rows(x)==1) return(x)
-	shift = ln(maxdouble()/rows(x)) :- colmax(Re(x))
-//	shift = shift - (shift:>0):*shift  // only downshift, to present overflow; shifting can prevent underflow & overflow but can also reduce precision if the shifter is much larger than entries
-	return (ln(colsum(exp(x :+ shift))) - shift)
-}
-
-complex colvector asdfLogRunningSumExp(complex colvector x) {
-	real scalar shift
-	if (rows(x)<=1) return(x)
-	shift = ln(maxdouble()/rows(x)) :- colmax(Re(x))
-	return (ln(runningsum(exp(x :+ shift))) :- shift)
-}
 
 // sum pairs of numbers stored in logs, avoiding overflow, treating missing as log of 0
 real colvector asdfLogSumExpRow(real matrix x) {
