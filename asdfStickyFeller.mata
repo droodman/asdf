@@ -1,4 +1,4 @@
-global lnStickyFeller_M 60  // max term index in power series expansion of U()
+global UPower_M 60  // max term index in power series expansion of U()
 global lnBesselKPower_M 22  // max term index in power series expansion of BesselK()
 global lnUAsymParam_M 12 // max term index in large-parameter expansion of U(); 2S+3 = last Bernoulli number needed
 global lnStickyFeller_N 28  // number of points sampled on parabola of integration
@@ -9,22 +9,109 @@ mata set matastrict on
 mata set mataoptimize on
 mata set matalnum off
 
+class clsUPower {
+  pointer(complex rowvector) scalar palpha
+	real scalar beta, paramDirty, lnz, i
+  real colvector m, lnm, mlnz, denom1, denom2, mbeta
+  complex colvector terms1, terms2
+  complex matrix coefs1, coefs2
+  
+  void new(), setalpha(), setbeta(), setz()
+  complex rowvector lnU()
+}
+
+void clsUPower::new() {
+	lnm  = ln(m = 0::$UPower_M)
+  coefs1 = coefs2 = J(`=$UPower_M+1', $lnStickyFeller_N, C(.))
+}
+
+void clsUPower::setalpha(complex rowvector _alpha) {
+	if (palpha==NULL)
+  	palpha = &_alpha
+  else if (cols(*palpha) != cols(_alpha) | (*palpha)[1] != _alpha[1])
+  	palpha = &_alpha
+  paramDirty = 1
+}
+
+void clsUPower::setbeta(real scalar _beta) {
+  if (beta != _beta) {
+    beta = _beta
+    paramDirty = 1
+    denom1 = quadrunningsum(ln(        beta - 1 :: $UPower_M.5 + beta - 1) + lnm)  // first entry will be 0 since lnm[1]=.
+    denom2 = quadrunningsum(ln(mbeta = 1 - beta :: $UPower_M.5 + 1 - beta) + lnm)
+  }
+}
+
+void clsUPower::setz(real scalar _z, real scalar _lnz) {
+	pragma unused _z
+  if (lnz != _lnz) {
+    lnz = _lnz
+    mlnz = m * lnz
+  }
+}
+
+// return value will be lnStickyFeller_N long; only firt maxi entries meaningful
+complex rowvector clsUPower::lnU(real scalar maxi /*complex rowvector lnC*/) {
+  complex scalar _alpha; real colvector shift; complex rowvector S1, S2
+
+  if (maxi > $lnStickyFeller_N) maxi = $lnStickyFeller_N
+  for (i=paramDirty? 1 : i+1; i <= maxi; i++) {
+    _alpha = (*palpha)[i]
+    (terms1 = ln((_alpha -    1) :+ m)) [1] = 0       // for making log Pochhammer symbols (alpha)_m and (alpha+1-beta)_m; edit m=0 entry to ln 1
+    (terms2 = ln((_alpha - beta) :+ m)) [1] = lngamma(beta)-lngamma(2-beta)+lngamma(_alpha+1-beta)-lngamma(_alpha)  // edit m=0 entry to multiplier on second series
+    coefs1[,i] = quadrunningsum(terms1) - denom1
+    coefs2[,i] = quadrunningsum(terms2) - denom2
+  }
+  paramDirty = 0
+  S1 = asdfLogSumExp(coefs1 :+        mlnz)
+  S2 = asdfLogSumExp(coefs2 :+ mbeta * lnz)
+  shift = 1.6232bdd7abcd2X+009 /*ln(maxdouble()/2)*/ :- colmax(Re(S1) \ Re(S2))
+  return (ln(exp(S1 + shift) - exp(S2 + shift)) - shift)  // return power series sum in logs
+}
+
+
+// log Tricomi U for large a, dlmf.nist.gov/13.8.E11
+// fails for entries of a whose real part is a negative integer because then lngamma(a) wrongly returns missing (as of 9/29/20)
+complex rowvector clsStickyFeller::lnUAsymParam(complex rowvector a, real scalar b, real scalar z, real scalar lnz) {
+  real colvector c, bzlnUAsymParam_B; real scalar k, m, t1, t2, t3, zs; complex rowvector term, lnterm, lnsqrtzdiva, lna; complex matrix mlna
+
+	zs = k = 1
+	c = (lnUAsymParam_q[1] = z/12 - b*.5) \ 1  // c_1 \ c_0 -- store c values backward
+	bzlnUAsymParam_B = (-b) * lnUAsymParam_B - z * lnUAsymParam_kB
+
+	for (m=1; m<=$lnUAsymParam_M-1; ) {
+		t1 = bzlnUAsymParam_B[|.\++k|]
+		c =  c          ' t1                  / k \ c  // add two more terms to c
+		t1 = c[|.\k++|] ' t1
+		c = (t1 + c[k] * bzlnUAsymParam_B[k]) / k \ c
+
+		t1 = *lnUAsymParam_PT[m++] :* (zs = zs[1]*z \ zs)  // since c is stored backward, run these sums m to 0
+		t3 = c[|.\m+1|] :/ (t2 = exp(lngamma(m+1-b :: .5-b)))  // exp(lngamma()) faster than gamma()!; even last entry is >0 if nu<0 so lngamma() will return right answer without converting argument to complex
+		lnUAsymParam_p[m] = t2[2] * cross(t1, t3[|2\m+1|])
+		lnUAsymParam_q[m] = t2[1] * cross(t1, t3[|.\m  |])
+	}
+
+	lna = ln(a)  // next 4 lines can be substantially precomputed
+	lnsqrtzdiva = 0.5 * (lnz :- lna)
+	term = sqrt(a * z); term = C(term + term); lnterm = ln(term)
+	mlna = (0::$lnUAsymParam_M-1) * lna  // ln a^m
+	return ((1.62e42fefa39efX-001 /*ln(2)*/ + z*.5) :+ ((1 - b) * lnsqrtzdiva - lngamma(a) + asdfLogSumExp(asdflnBesselKAsym(b-1, term, lnterm) :+ asdfLogSumExp(ln(C(lnUAsymParam_p)) :- mlna) \ 
+	                                                                                                       asdflnBesselKAsym(b  , term, lnterm) :+ asdfLogSumExp(ln(C(lnUAsymParam_q)) :- mlna) :+ lnsqrtzdiva)))
+}
+
+
 class clsStickyFeller {
-	real colvector lnStickyFeller_m, lnStickyFeller_lnm, lnUAsymParam_B, lnUAsymParam_kB, lnBesselKPower_0toM, lnBesselKPower_2Mto0, lnBesselKAsym_k, lnBesselKAsym_twokm1sq
+	real colvector lnUAsymParam_B, lnUAsymParam_kB, lnBesselKPower_0toM, lnBesselKPower_2Mto0, lnBesselKAsym_k, lnBesselKAsym_twokm1sq
 	complex rowvector lnStickyFeller_tlambdalnu, lnStickyFeller_u2
 	pointer(real colvector) colvector lnUAsymParam_PT
 	real rowvector lnUAsymParam_p, lnUAsymParam_q
 
 	real colvector lnStickyFeller()
 	complex matrix lnStickyGreen()
-	complex scalar hypergeomdiff()
-	complex rowvector lnUAsymParam(), lnBesselKAsym(), lnBesselKPower()
 	void new()
 }
 
 void clsStickyFeller::new() {
-	lnStickyFeller_m = 1::$lnStickyFeller_M; lnStickyFeller_lnm = ln(lnStickyFeller_m)
-
   complex rowvector u
 	u = C(1, (.5..27.5) * 1.6c782f6914edbX-003 /*h*/)  // really (1 + ui)
 	lnStickyFeller_u2 = u :* u
@@ -100,12 +187,13 @@ real colvector clsStickyFeller::lnStickyFeller(real colvector t, real colvector 
 	
 	// Done computing asborbing term and prepping for parabolic path integral for sticky term. Now compute sticky term along parabola.
 
-	real colvector tp1, tp2, denompx1, denompx2, denompy1, denompy2, numerp1, numerp2, s, xhi, yhi
+	real colvector s, xhi, yhi
 	real scalar muj, _lnC, lnbax, lnbay, i, j, lngammanegnu, _nulnx, _nulny, beta, _bax, _bay, qa, qb, qc, qd, smaxx, smaxy, Ream1, ta, ta2, ta3, absa2, Ima2, _ix, _iy, absb, anypowerx, anyasymargx, anyasymparamx, anypowery, anyasymargy, anyasymparamy, powerx, asymargx, asymparamx, powery, asymargy, asymparamy
 	complex matrix alpha
-	complex scalar lnC, lnM, _alpha, _alpha1beta, lngammaalpha1beta, retval
-	complex rowvector lnUAsymParamx, lnUAsymParamy
+	complex scalar lnC, lnM, _alpha, lngammaalpha1beta, retval
+	complex rowvector lnUAsymParamx, lnUAsymParamy, lnUPowerx, lnUPowery, alphaj
 	complex colvector terms, numera
+  class clsUPower scalar SUPowerx, SUPowery
 
 	beta = 1 + nu
 
@@ -118,12 +206,13 @@ real colvector clsStickyFeller::lnStickyFeller(real colvector t, real colvector 
 		lngammanegnu = lngamma(-nu)
 		_lnC = lngamma(beta) - ln(-nu) - lngammanegnu - nu * ln(abs(b)/a)
 
-		tp1 = ln(beta   :: $lnStickyFeller_M.5 + nu) + lnStickyFeller_lnm  // faster than ln(nu :+ m)
-		tp2 = ln(1 - nu :: $lnStickyFeller_M.5 - nu) + lnStickyFeller_lnm  // needed for power series only
+    SUPowerx = clsUPower(); SUPowerx.setbeta(beta)
+    SUPowery = clsUPower(); SUPowery.setbeta(beta)
 
 		for (j=rows(x);j;j--) {
 			lnbax = ln(_bax = bax[j]); _nulnx = nulnx[j]
 			lnbay = ln(_bay = bay[j]); _nulny = nulny[j]
+      alphaj = alpha[j,]
 
 			// indexes in lambda[j,] after which switch from power or asymptotic-argument evaluation to asymptotic-parameter; min value is 0
 			// Spuriously precise thresholds from benchmarking against mpmath's hyperu()
@@ -133,31 +222,26 @@ real colvector clsStickyFeller::lnStickyFeller(real colvector t, real colvector 
       anypowerx = xhi[j]==0 & _ix; anyasymargx = xhi[j] & _ix; anyasymparamx = _ix < $lnStickyFeller_N
       anypowery = yhi[j]==0 & _iy; anyasymargy = yhi[j] & _iy; anyasymparamy = _iy < $lnStickyFeller_N
 
-			if (anypowerx) {  // prep for power series
-				denompx1 = lnbax :- tp1
-				denompx2 = lnbax :- tp2
-			}
-			if (anypowery) {
-				denompy1 = lnbay :- tp1
-				denompy2 = lnbay :- tp2
-			}
-
 			if (anyasymparamx)
-				lnUAsymParamx = lnUAsymParam(alpha[|j,_ix+1\j,.|], beta, _bax, lnbax)
+					lnUAsymParamx = lnUAsymParam(alphaj[|_ix+1\.|], beta, _bax, lnbax)
 			if (anyasymparamy)
-				lnUAsymParamy = lnUAsymParam(alpha[|j,_iy+1\j,.|], beta, _bay, lnbay)
+          lnUAsymParamy = lnUAsymParam(alphaj[|_iy+1\.|], beta, _bay, lnbay)
+			if (anypowerx) {
+      	SUPowerx.setalpha(alphaj)
+      	SUPowerx.setz(_bax, lnbax)
+        lnUPowerx = SUPowerx.lnU(_ix)
+      }
+			if (anypowery) {
+      	SUPowery.setalpha(alphaj)
+      	SUPowery.setz(_bay, lnbay)
+        lnUPowery = SUPowery.lnU(_iy)
+      }
 
-			for (i=$lnStickyFeller_N;i;i--) {
+      for (i=$lnStickyFeller_N;i;i--) {
         asymparamx = i > _ix; powerx = anypowerx & asymparamx==0; asymargx = anyasymargx & asymparamx==0
         asymparamy = i > _iy; powery = anypowery & asymparamy==0; asymargy = anyasymargy & asymparamy==0 
-
-				_alpha = alpha[j,i]; lngammaalpha1beta = lngamma(_alpha1beta = _alpha + 1 - beta)
+				_alpha = alphaj[i]; lngammaalpha1beta = lngamma(_alpha + 1 - beta)
 				lnC = _lnC + (lngammaalpha1beta - lngamma(_alpha))
-
-				if (powerx | powery) {
-					numerp1 = ln((_alpha      - 1) :+ lnStickyFeller_m)  // numerators in power series X::X+200.5 faster?
-					numerp2 = ln((_alpha1beta - 1) :+ lnStickyFeller_m)
-				}
 
 				if (!(powerx & powery))
 					lnM = lngammaalpha1beta - lngammanegnu
@@ -166,7 +250,7 @@ real colvector clsStickyFeller::lnStickyFeller(real colvector t, real colvector 
 					Ream1 = Re(_alpha) - 1; absa2 = abs(_alpha); absa2 = absa2*absa2; Ima2 = Im(_alpha); Ima2 = Ima2*Ima2
 					ta = Ream1 - nu; ta2 = ta*ta + Ima2; ta3 = -Ream1 - Ream1 - 1 + absa2
 					qa = 2*(Ream1+ta); qb = ta3+ta2+4*Ream1*ta; qc = 2*(Ream1*ta2+ta*ta3); qd = ta3*ta2  // coefficients of quartic equation governing when norm of ratio of successive terms is 1
-					smaxx = asymargx? max((0, asdfQuarticRoot(qa, qb-_bax*_bax, qc, qd))) : -1 // power series index about where terms permanently start to increase
+					smaxx = asymargx? max((0, asdfQuarticRoot(qa, qb-_bax*_bax, qc, qd))) : -1 // index about where terms permanently start to increase
 					smaxy = asymargy? max((0, asdfQuarticRoot(qa, qb-_bay*_bay, qc, qd))) : -1
 					s = 0 :: max((smaxx, smaxy))
 					numera = ln(s :+ (_alpha - 1)) + ln(s :+ (_alpha - beta)) - ln(s)  // numerator in large-argument asymptotic series; actually includes part for s! denominator too
@@ -175,7 +259,7 @@ real colvector clsStickyFeller::lnStickyFeller(real colvector t, real colvector 
 				retval = -ln(muj * lnStickyFeller_u2[i] / mu - nu * exp(lnC))
 				if (_nulnx < .)
 					if (powerx)
-						retval = retval + hypergeomdiff(numerp1 + denompx1, lnC - _nulnx, numerp2 + denompx2)
+						retval = retval + lnUPowerx[i]
 					else if (asymparamx)
 						retval = retval + lnUAsymParamx[i - _ix] + lnM
 					else {  // asymptotic large-argument series
@@ -184,14 +268,14 @@ real colvector clsStickyFeller::lnStickyFeller(real colvector t, real colvector 
 					}
 				if (_nulny < .)
 					if (powery)
-						retval = retval + hypergeomdiff(numerp1 + denompy1, lnC - _nulny, numerp2 + denompy2)
+						retval = retval + lnUPowery[i]
 					else if (asymparamy)
 						retval = retval + lnUAsymParamy[i - _iy] + lnM
 					else {  // asymptotic large-argument series
 						(terms = (smaxy < smaxx? numera[|.\smaxy+1|] : numera) :- (1.921fb54442d18X+001i /*pi i*/ + lnbay)) [1] =  - _alpha * lnbay
 						retval = retval + asdfLogSumExp(runningsum(terms)) + lnM
 					}
-				alpha[j,i] = retval					 
+				alpha[j,i] = retval  // dicie: sticking return values in alpha even as lnU() routines are holding copies of rows of it for potential reuse
 			}
 		}
 
@@ -215,66 +299,24 @@ real colvector clsStickyFeller::lnStickyFeller(real colvector t, real colvector 
 			termy = _term * sqrt(y[j]); lntermy = _lnterm :+ .5*lny[j]
 
 			_ix = ix[j]; _iy = iy[j]
-			alpha[j,] = c :+ ((x[j]? (_ix <  1                ? lnBesselKAsym (nu, termx, lntermx) : 
-			                         (_ix >= $lnStickyFeller_N? lnBesselKPower(nu, lntermx)        :
-			                                                    lnBesselKPower(nu, lntermx[|.\_ix|]), lnBesselKAsym(nu, termx[|_ix+1\.|], lntermx[|_ix+1\.|]))) - nu * lntermx :
+			alpha[j,] = c :+ ((x[j]? (_ix <  1                ? asdflnBesselKAsym (nu, termx, lntermx) : 
+			                         (_ix >= $lnStickyFeller_N? asdflnBesselKPower(nu, lntermx)        :
+			                                                    asdflnBesselKPower(nu, lntermx[|.\_ix|]), asdflnBesselKAsym(nu, termx[|_ix+1\.|], lntermx[|_ix+1\.|]))) - nu * lntermx :
 																zerolimit) +
-												(y[j]? (_iy < 1                 ? lnBesselKAsym (nu, termy, lntermy) : 
-			                         (_iy >= $lnStickyFeller_N? lnBesselKPower(nu, lntermy)        : 
-			                                                    lnBesselKPower(nu, lntermy[|.\_iy|]), lnBesselKAsym(nu, termy[|_iy+1\.|], lntermy[|_iy+1\.|]))) - nu * lntermy :
+												(y[j]? (_iy < 1                 ? asdflnBesselKAsym (nu, termy, lntermy) : 
+			                         (_iy >= $lnStickyFeller_N? asdflnBesselKPower(nu, lntermy)        : 
+			                                                    asdflnBesselKPower(nu, lntermy[|.\_iy|]), asdflnBesselKAsym(nu, termy[|_iy+1\.|], lntermy[|_iy+1\.|]))) - nu * lntermy :
 																zerolimit) - 
 													 ln(_lambda * (gammanegnu2 / mu) - (_lambda / a) :^ -nu * pidivsinnupi))
 		}
 	}
-
 	return (asdfLogSumExpRow((lnp0 , lnm + ln(_mu :* rowsum(asdfReexp(lnStickyFeller_tlambdalnu :+ alpha))))))
-}
-
-
-/// sum two hypergeometric series whose first term is 1 and is implicit. Multiply second by a coefficient, then subtract it from first. Avoid overflow. All inputs and output in logs
-// *** overwrites x1, x2 for efficiency
-complex scalar clsStickyFeller::hypergeomdiff(complex colvector x1, complex scalar c2, complex colvector x2) {
-	real scalar shift
-	                    _quadrunningsum(x1, x1)
-	x2[1] = x2[1] + c2; _quadrunningsum(x2, x2)
-	shift = ln(maxdouble()/rows(x1)) :- max((0, Re(c2), max(Re(x1)), max(Re(x2))))
-	return (ln(exp(shift) - exp(c2 + shift) + quadcolsum(exp(x1 :+ shift) - exp(x2 :+ shift))) - shift)
-}
-
-
-// log Tricomi U for large a, dlmf.nist.gov/13.8.E11
-// fails for entries of a whose real part is a negative integer because then lngamma(a) wrongly returns missing (as of 9/29/20)
-complex rowvector clsStickyFeller::lnUAsymParam(complex rowvector a, real scalar b, real scalar z, real scalar lnz) {
-  real colvector c, bzlnUAsymParam_B; real scalar k, m, t1, t2, t3, zs; complex rowvector term, lnterm, lnsqrtzdiva, lna; complex matrix mlna
-
-	zs = k = 1
-	c = (lnUAsymParam_q[1] = z/12 - b*.5) \ 1  // c_1 \ c_0 -- store c values backward
-	bzlnUAsymParam_B = (-b) * lnUAsymParam_B - z * lnUAsymParam_kB
-
-	for (m=1; m<=$lnUAsymParam_M-1; ) {
-		t1 = bzlnUAsymParam_B[|.\++k|]
-		c =  c          ' t1                  / k \ c  // add two more terms to c
-		t1 = c[|.\k++|] ' t1
-		c = (t1 + c[k] * bzlnUAsymParam_B[k]) / k \ c
-
-		t1 = *lnUAsymParam_PT[m++] :* (zs = zs[1]*z \ zs)  // since c is stored backward, run these sums m to 0
-		t3 = c[|.\m+1|] :/ (t2 = exp(lngamma(m+1-b :: .5-b)))  // exp(lngamma()) faster than gamma()!; even last entry is >0 if nu<0 so lngamma() will return right answer without converting argument to complex
-		lnUAsymParam_p[m] = t2[2] * cross(t1, t3[|2\m+1|])
-		lnUAsymParam_q[m] = t2[1] * cross(t1, t3[|.\m  |])
-	}
-
-	lna = ln(a)  // next 4 lines can be substantially precomputed
-	lnsqrtzdiva = 0.5 * (lnz :- lna)
-	term = sqrt(a * z); term = C(term + term); lnterm = ln(term)
-	mlna = (0::$lnUAsymParam_M-1) * lna  // ln a^m
-	return ((1.62e42fefa39efX-001 /*ln(2)*/ + z*.5) :+ ((1 - b) * lnsqrtzdiva - lngamma(a) + asdfLogSumExp(lnBesselKAsym(b-1, term, lnterm) :+ asdfLogSumExp(ln(C(lnUAsymParam_p)) :- mlna) \ 
-	                                                                                                       lnBesselKAsym(b  , term, lnterm) :+ asdfLogSumExp(ln(C(lnUAsymParam_q)) :- mlna) :+ lnsqrtzdiva)))
 }
 
 
 // Compute log Bessel K with power series formula and complex argument z
 // series length from Zhang and Jin's CIKVB @ people.sc.fsu.edu/~jburkardt/f_src/special_functions/special_functions.f90
-complex rowvector clsStickyFeller::lnBesselKPower(real scalar nu, complex rowvector lnz) {
+complex rowvector asdflnBesselKPower(real scalar nu, complex rowvector lnz) {
   real colvector InuDenom, InegnuDenom; complex matrix twomlnhalfz; complex rowvector nulnhalfz, lnhalfz
 
   (InuDenom    = ln(( nu::$lnBesselKPower_M.5+nu) :* lnBesselKPower_0toM)) [1] = lngamma(1+nu)
@@ -291,7 +333,7 @@ complex rowvector clsStickyFeller::lnBesselKPower(real scalar nu, complex rowvec
 // Compute log Bessel K with asymptotic formula for small order (here, -1<nu<1 ASSUMED) and complex argument z
 // max series length index bounds from Zhang and Jin's CIKVB @ people.sc.fsu.edu/~jburkardt/f_src/special_functions/special_functions.f90
 // This code only takes first 8 terms of series, which they recommend for abs(z) > 50.
-complex rowvector clsStickyFeller::lnBesselKAsym(real scalar nu, complex rowvector z, complex rowvector lnz) {
+complex rowvector asdflnBesselKAsym(real scalar nu, complex rowvector z, complex rowvector lnz) {
   real scalar twonu, i; complex matrix terms; complex rowvector retval
 
   if (nu == -.5 | nu == .5)   // only first term is non-zero
@@ -353,7 +395,7 @@ mata mlib create lasdfStickyFeller, dir("`c(sysdir_plus)'l") replace
 mata mlib add lasdfStickyFeller *(), dir("`c(sysdir_plus)'l")
 mata mlib index
 end
-----
+---
 * Goran test
 mata S = clsStickyFeller(); p = exp(S.lnStickyFeller(t=rangen(.1,2,20)#J(20,1,1), x=J(400,1,1), y=J(20,1,1)#rangen(.1,2,20), a=1, b=1, nu=-.25, mu=5))
 drop _all
