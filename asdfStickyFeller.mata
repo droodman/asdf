@@ -10,6 +10,10 @@ mata set matastrict on
 mata set mataoptimize on
 mata set matalnum off
 
+struct smatrix {
+	real matrix M
+}
+
 class clsBesselKAsym {
 	real colvector k, twokm1sq
 	void new()
@@ -49,7 +53,7 @@ class clsUPower {
   void new(), setalpha(), setbeta(), setz()
   complex rowvector lnU()
 }
-
+	
 void clsUPower::new() {
 	lnm  = ln(m = 0::$UPower_M)
   coefs1 = coefs2 = J(`=$UPower_M+1', $StickyFeller_N, C(.))
@@ -82,10 +86,10 @@ void clsUPower::setz(real scalar _z, real scalar _lnz) {
 
 // return value will be StickyFeller_N long; only firt maxi entries meaningful
 complex rowvector clsUPower::lnU(real scalar maxi /*complex rowvector lnC*/) {
-  complex scalar _alpha; real colvector shift; complex rowvector S1, S2
+  complex scalar _alpha; real colvector shift; complex rowvector S1, S2; real scalar _maxi
 
-  if (maxi > $StickyFeller_N) maxi = $StickyFeller_N
-  for (i=paramDirty? 1 : i+1; i <= maxi; i++) {
+  _maxi = maxi > $StickyFeller_N? $StickyFeller_N : maxi
+  for (i=paramDirty? 1 : i+1; i<=_maxi; i++) {
     _alpha = (*palpha)[i]
     (terms1 = ln((_alpha -    1) :+ m)) [1] = 0       // for making log Pochhammer symbols (alpha)_m and (alpha+1-beta)_m; edit m=0 entry to ln 1
     (terms2 = ln((_alpha - beta) :+ m)) [1] = lngamma(beta)-lngamma(2-beta)+lngamma(_alpha+1-beta)-lngamma(_alpha)  // edit m=0 entry to multiplier on second series
@@ -106,7 +110,7 @@ class clsUAsymParam {
 	real colvector B, kB, zmInd, C2
 	real rowvector mlnz, zeroto3Mp1
 	pointer(real rowvector) colvector pPT
-	complex rowvector lnSp, lnSq, lnalpha, lngammaalpha, lnsqrtzdivalpha
+	complex rowvector lnSp, lnSq, alpha, lnalpha, lngammaalpha, lnsqrtzdivalpha
 	complex matrix lnp, lnq, mlnalpha
   class clsBesselKAsym scalar SBessel
 
@@ -163,7 +167,7 @@ void clsUAsymParam::setz(real scalar _z, real scalar _lnz) {
 // log Tricomi U for large a, dlmf.nist.gov/13.8.E11
 // fails for entries of a whose real part is a negative integer because then lngamma(a) wrongly returns missing (as of 9/29/20)
 complex rowvector clsUAsymParam::lnU(real scalar mini) {
-  real colvector betaB; real scalar m, t1, t2; complex rowvector alpha, term, lnterm, lnsqrtzdivalphaa; real matrix C, t3
+  real colvector betaB; real scalar m, t1, t2; complex rowvector term, lnterm; real matrix C, t3
 
 	if (betaDirty) {
 		C = 1 // c_0 -- store c polynomials bottom-to-top
@@ -213,6 +217,94 @@ complex rowvector clsUAsymParam::lnU(real scalar mini) {
 }
 
 
+class clsUAsymArg {
+  void setalpha(), setbeta(), setz()
+  complex rowvector lnU()
+	real rowvector QuarticRoot()
+
+	real scalar alphaDirty, betaDirty, beta, z, lnz
+	struct smatrix colvector numer
+	pointer(complex rowvector) scalar palpha
+}
+
+// *** Doesn't make a local copy of alpha, just takes by reference
+void clsUAsymArg::setalpha(complex rowvector _alpha) {  // maybe can be dispensed with through "extends"
+	palpha = &_alpha
+	alphaDirty = 1
+}
+
+void clsUAsymArg::setbeta(real scalar _beta) {
+  if (beta != _beta) {
+    beta = _beta
+    betaDirty = 1
+  }
+}
+
+void clsUAsymArg::setz(real scalar _z, real scalar _lnz) {
+	if (lnz != _lnz) {
+		  z  =   _z
+    lnz  = _lnz
+	}
+}
+
+// Find highest real root of a quartic equation using Euler's method, mathforum.org/dr.math/faq/faq.cubic.equations.html
+real rowvector clsUAsymArg::QuarticRoot(real rowvector a, real rowvector b, real rowvector c, real rowvector d) {
+  real rowvector e, f, fourg, h, i, j, a2, h2, h3; complex rowvector alpha, z1, z2, p, q, r; complex matrix x
+
+	    e = b - .375*(a2=a:*a)  // substitute with y = x - b/4
+	    f = c + (.125*a2 - .5*b):*a
+	fourg = 4*d - a2:*(.046875*a2 - .25*b) - a:*c
+
+	h = .5*e  // auxilliary cubic equation
+	i = .0625*(e:*e-fourg)
+	j = -.015625*f:*f
+
+	p = (i-(h2=h:*h)/3) / 3  // substite with z = y - h/3
+	q = (((2/27)*h2-i/3):*h+j) * .5
+
+	alpha = (sqrt(C(q:*q + p:*p:*p)) - q) :^ (1/3)
+	z1 = alpha - p :/ alpha  // roots of p,q equation
+	alpha = alpha * (-.5+1.bb67ae8584cabX-001i /*exp(2i*pi()/3)*/)
+	z2 = alpha - p :/ alpha
+
+	h3 = h/3
+	p = sqrt(z1 - h3)  // square roots of roots of auxilliary cubic
+	q = sqrt(z2 - h3)
+	r = f:/(p:*q) * -.125
+
+	x = p+q+r\p-q-r\-p+q-r\-p-q+r
+	return (colmax(Re(x) :* abs(Im(x):<1e-3))-0.25*a)
+}
+
+
+
+// log Tricomi U for large a, dlmf.nist.gov/13.8.E11
+// fails for entries of a whose real part is a negative integer because then lngamma(a) wrongly returns missing (as of 9/29/20)
+complex rowvector clsUAsymArg::lnU(real scalar maxi) {
+	real rowvector Ream1, ta, ta2, ta3, absa2, Ima2, M; complex rowvector retval; real colvector m, numer; complex colvector terms; real scalar qa, qb, qc, qd, i, _maxi
+
+	if (alphaDirty) {
+		Ream1 = Re(*palpha) :- 1; absa2 = abs(*palpha); absa2 = absa2:*absa2; Ima2 = Im(*palpha); Ima2 = Ima2:*Ima2; ta3 = (absa2-Ream1-Ream1) :- 1
+	}
+	if (alphaDirty | betaDirty) {
+		ta = Ream1 :- (1+beta); ta2 = ta:*ta + Ima2
+		qa = 2*(Ream1+ta); qb = ta3+ta2+4*Ream1:*ta; qc = 2*(Ream1:*ta2+ta:*ta3); qd = ta3:*ta2  // coefficients of quartic equation governing when norm of ratio of successive terms is 1
+	}
+  _maxi = maxi > $StickyFeller_N? $StickyFeller_N : maxi
+	M = QuarticRoot(qa[|.\_maxi|], qb[|.\_maxi|] :- z*z, qc[|.\_maxi|], qd[|.\_maxi|])  // indexes about where terms start to permanently increase
+
+	retval = J(1, cols(M), C(.))
+	for (i=cols(M);i;i--) {
+		m = 0 :: M[i]
+		numer = ln(m :+ ((*palpha)[i] - 1)) + ln(m :+ ((*palpha)[i] - beta)) - ln(m)  // scope for saving and reusing these when only z changes
+		(terms = numer :- (1.921fb54442d18X+001i /*pi i*/ + lnz)) [1] =  (*palpha)[i] * (-lnz)
+		retval[i] = asdfLogSumExp(quadrunningsum(terms))
+	}
+	alphaDirty = betaDirty = 0
+	return (retval)
+}
+
+
 class clsStickyFeller {
 	real colvector lnBesselKPower_0toM, lnBesselKPower_2Mto0
 	complex rowvector lnStickyFeller_tlambdalnu, lnStickyFeller_u2
@@ -236,7 +328,7 @@ void clsStickyFeller::new() {
 // compute log transition density f(t; x, y) = p(t; x, y) * m(dx) for sticky Feller by applying Weideman & Trefethen (2007), Weideman (2010), parabolic contour method to sticky term of Green function
 // assumes b < 0 and t,x,y have same height
 real colvector clsStickyFeller::lnStickyFeller(real colvector t, real colvector x, real colvector y, real scalar a, real scalar b, real scalar nu, real scalar mu) {
-  real colvector _mu, lnp0, negbt, lnattilde, lnm, lnx, lny, nulnx, nulny, zerofill, zeroind, missingfill, lnJacobian, bax, bay; real scalar ba; class clsBesselKAsym SBesselKAsym
+  real colvector _mu, lnp0, negbt, lnattilde, lnm, lnx, lny, zerofill, zeroind, missingfill, lnJacobian, bax, bay; real scalar ba; class clsBesselKAsym SBesselKAsym
 
 	if (nu < -1 | nu > 0 | mu < 0)
 		return (.)
@@ -266,29 +358,28 @@ real colvector clsStickyFeller::lnStickyFeller(real colvector t, real colvector 
 	if (rows(zerofill)) lnp0[zeroind] = missingfill  // if y=0, "absorbing term" drops out
 
 	ba = abs(b / a); bax = ba *x; bay = ba * y
-	nulnx = nu * lnx; nulny = nu * lny
-	_editmissing(lnm = nulny - (b < 0? bay : bax) :- ln(a), -ln(mu))  // log speed measure; takes special value of 1/mu when y = 0; b>0 modification is a hack to multiply by exp(-b/a*(x+y))
+	_editmissing(lnm = nu * lny - (b < 0? bay : bax) :- ln(a), -ln(mu))  // log speed measure; takes special value of 1/mu when y = 0; b>0 modification is a hack to multiply by exp(-b/a*(x+y))
+// nu*lny probably re-computed in UPower()...
 
-/*	log_epsilon = ln(1e-15)  // Logic extracted from Garrappa's mlf routine for Matlab
-	log_eps = ln(epsilon(1))
-	w = sqrt(log_eps / (log_eps - log_epsilon))  // half-width of integration range, needed to assure given precision
-	N = ceil(-w * log_epsilon / (2*pi())) + 1    // half the number of integration points
-	h = w :/ (N-.5)                              // width of bars in Riemann integral; do an even number of integration points since only integrating over half of parabola
-  u = C(1, (.5..27.5) * 1.6c782f6914edbX-003)  // really 1 + ui */
+//	log_epsilon = ln(1e-15)  // Logic extracted from Garrappa's mlf routine for Matlab
+//	log_eps = ln(epsilon(1))
+//	w = sqrt(log_eps / (log_eps - log_epsilon))  // half-width of integration range, needed to assure given precision
+//	N = ceil(-w * log_epsilon / (2*pi())) + 1    // half the number of integration points
+//	h = w :/ (N-.5)                              // width of bars in Riemann integral; do an even number of integration points since only integrating over half of parabola
+//  u = C(1, (.5..27.5) * 1.6c782f6914edbX-003)  // really 1 + ui
 
   _mu = 1.813f9e629e9c0X+000 /*log_epsilon - log_eps*/ :/ t  // different "mu" -- as in Garrappa (2015), p. 1364.
 
 	
 	// Done computing asborbing term and prepping for parabolic path integral for sticky term. Now compute sticky term along parabola.
 
-	real colvector s, xhi, yhi
-	real scalar _lnC, lnbax, lnbay, i, j, lngammanegnu, beta, _bax, _bay, qa, qb, qc, qd, smaxx, smaxy, Ream1, ta, ta2, ta3, absa2, Ima2, _ix, _iy, absb, anypowerx, anyasymargx, anyasymparamx, anypowery, anyasymargy, anyasymparamy, asymargx, asymparamx, asymargy, asymparamy
+	real colvector xhi, yhi
+	real scalar _lnC, lnbax, lnbay, j, lngammanegnu, beta, _bax, _bay, _ix, _iy, absb, anypowerx, anyasymargx, anyasymparamx, anypowery, anyasymargy, anyasymparamy
 	complex matrix alpha, retval
-	complex scalar _alpha
-	complex rowvector lnM, lnC, lnUAsymParamx, lnUAsymParamy, lnUPowerx, lnUPowery, alphaj, lngammaalpha1beta
-	complex colvector terms, numera
+	complex rowvector lnM, lnUAsymParamx, lnUAsymParamy, lnUPowerx, lnUPowery, lnUAsymArgx, lnUAsymArgy, alphaj
   class clsUPower scalar SUPower
   class clsUAsymParam scalar SUAsymParam
+  class clsUAsymArg scalar SUAsymArg
 
 	beta = 1 + nu
 
@@ -303,6 +394,7 @@ real colvector clsStickyFeller::lnStickyFeller(real colvector t, real colvector 
 
     SUPower     = clsUPower()    ; SUPower.setbeta    (beta)
     SUAsymParam = clsUAsymParam(); SUAsymParam.setbeta(beta)
+    SUAsymArg   = clsUAsymArg()  ; SUAsymArg.setbeta  (beta)
 
 		retval = -ln((_mu / mu) * lnStickyFeller_u2 - nu * exp(_lnC :+ (lngamma(alpha :+ (1 - beta)) - lngamma(alpha))))  // _mu scales Weideman & Trefethen parabola; mu = stickiness!
 
@@ -319,10 +411,8 @@ real colvector clsStickyFeller::lnStickyFeller(real colvector t, real colvector 
       anypowerx = xhi[j]==0 & _ix; anyasymargx = xhi[j] & _ix; anyasymparamx = _ix < $StickyFeller_N
       anypowery = yhi[j]==0 & _iy; anyasymargy = yhi[j] & _iy; anyasymparamy = _iy < $StickyFeller_N
 
-			lngammaalpha1beta = lngamma(alphaj :+ (1 - beta))
-
 			if (anyasymparamx | anyasymparamy | anyasymargx | anyasymargy)
-				lnM = lngammaalpha1beta :- lngammanegnu
+				lnM = lngamma(alphaj :+ (1 - beta)) :- lngammanegnu
 
 			if (anypowerx) {
       	SUPower.setalpha(alphaj)
@@ -337,51 +427,29 @@ real colvector clsStickyFeller::lnStickyFeller(real colvector t, real colvector 
 			if (anyasymparamx) {
       	SUAsymParam.setalpha(alphaj)
       	SUAsymParam.setz(_bax, lnbax)
-        lnUAsymParamx = SUAsymParam.lnU(_ix) + lnM[|_ix+1\.|]
+        lnUAsymParamx = SUAsymParam.lnU(_ix)
 			}
-			if (anyasymparamy) {
+ 			if (anyasymparamy) {
       	SUAsymParam.setalpha(alphaj)
       	SUAsymParam.setz(_bay, lnbay)
-        lnUAsymParamy = SUAsymParam.lnU(_iy) + lnM[|_iy+1\.|]
+        lnUAsymParamy = SUAsymParam.lnU(_iy)
 			}
-
-			if (xhi[j] == 0)
-				retval[j,] = retval[j,] + (_ix? (_ix >= $StickyFeller_N? lnUPowerx : lnUPowerx[|.\_ix|], lnUAsymParamx) : lnUAsymParamx)			             
-			if (yhi[j] == 0)
-				retval[j,] = retval[j,] + (_iy? (_iy >= $StickyFeller_N? lnUPowery : lnUPowery[|.\_iy|], lnUAsymParamy) : lnUAsymParamy)			             
-
-			for (i=$StickyFeller_N;i;i--) {
-        asymparamx = i > _ix; asymargx = anyasymargx & asymparamx==0
-        asymparamy = i > _iy; asymargy = anyasymargy & asymparamy==0 
-
-				if (asymargx | asymargy) {
-					_alpha = alphaj[i]
-					Ream1 = Re(_alpha) - 1; absa2 = abs(_alpha); absa2 = absa2*absa2; Ima2 = Im(_alpha); Ima2 = Ima2*Ima2
-					ta = Ream1 - nu; ta2 = ta*ta + Ima2; ta3 = -Ream1 - Ream1 - 1 + absa2
-					qa = 2*(Ream1+ta); qb = ta3+ta2+4*Ream1*ta; qc = 2*(Ream1*ta2+ta*ta3); qd = ta3*ta2  // coefficients of quartic equation governing when norm of ratio of successive terms is 1
-					smaxx = asymargx? max((0, asdfQuarticRoot(qa, qb-_bax*_bax, qc, qd))) : -1 // index about where terms permanently start to increase
-					smaxy = asymargy? max((0, asdfQuarticRoot(qa, qb-_bay*_bay, qc, qd))) : -1
-					s = 0 :: max((smaxx, smaxy))
-					numera = ln(s :+ (_alpha - 1)) + ln(s :+ (_alpha - beta)) - ln(s)  // numerator in large-argument asymptotic series; actually includes part for s! denominator too
-				}
-
-				if (xhi[j])
-					if (asymparamx)
-						retval[j,i] = retval[j,i] + lnUAsymParamx[i - _ix]
-					else {  // asymptotic large-argument series
-						(terms = (smaxx < smaxy? numera[|.\smaxx+1|] : numera) :- (1.921fb54442d18X+001i /*pi i*/ + lnbax)) [1] =  - _alpha * lnbax
-						retval[j,i] = retval[j,i] + asdfLogSumExp(quadrunningsum(terms)) + lnM[i]
-					}
-				if (yhi[j])
-					if (asymparamy)
-						retval[j,i] = retval[j,i] + lnUAsymParamy[i - _iy]
-					else {  // asymptotic large-argument series
-						(terms = (smaxy < smaxx? numera[|.\smaxy+1|] : numera) :- (1.921fb54442d18X+001i /*pi i*/ + lnbay)) [1] =  - _alpha * lnbay
-						retval[j,i] = retval[j,i] + asdfLogSumExp(quadrunningsum(terms)) + lnM[i]
-					}
+			if (anyasymargx) {
+      	SUAsymArg.setalpha(alphaj)
+      	SUAsymArg.setz(_bax, lnbax)
+        lnUAsymArgx = SUAsymArg.lnU(_ix)
 			}
+			if (anyasymargy) {
+      	SUAsymArg.setalpha(alphaj)
+      	SUAsymArg.setz(_bay, lnbay)
+        lnUAsymArgy = SUAsymArg.lnU(_iy)
+			}
+ 
+			retval[j,] = retval[j,] + (xhi[j]? (_ix? (_ix >= $StickyFeller_N? lnUAsymArgx : lnUAsymArgx[|.\_ix|], lnUAsymParamx                 ) : lnUAsymParamx      ) + lnM :
+				                                 (_ix? (_ix >= $StickyFeller_N? lnUPowerx   : lnUPowerx  [|.\_ix|], lnUAsymParamx + lnM[|_ix+1\.|]) : lnUAsymParamx + lnM)) +
+			                          (yhi[j]? (_iy? (_iy >= $StickyFeller_N? lnUAsymArgy : lnUAsymArgy[|.\_iy|], lnUAsymParamy                 ) : lnUAsymParamy      ) + lnM :
+				                                 (_iy? (_iy >= $StickyFeller_N? lnUPowery   : lnUPowery  [|.\_iy|], lnUAsymParamy + lnM[|_iy+1\.|]) : lnUAsymParamy + lnM))
 		}
-
 	} else {  // squared Bessel/b=0 case. Would need a different approach if b could vary by observation
 
 		complex rowvector termx, lntermx, termy, lntermy, _lambda, _term, _lnterm, zerolimit; real scalar pidivsinnupi, gammanegnu2, c; real colvector ix, iy
@@ -456,40 +524,11 @@ complex colvector asdfLogRowSumExp(complex matrix x) {
 real matrix asdfReexp(complex matrix z)	return (exp(Re(z)) :* cos(Im(z)))
 
 
-// Find highest real root of a quartic equation using Euler's method, mathforum.org/dr.math/faq/faq.cubic.equations.html
-real scalar asdfQuarticRoot(real scalar a, real scalar b, real scalar c, real scalar d) {
-  real scalar e, f, fourg, h, i, j, a2, h2, h3; complex scalar alpha, z1, z2, p, q, r; complex colvector x
-
-	    e = b - .375*(a2=a*a)  // substitute with y = x - b/4
-	    f = c + (.125*a2 - .5*b)*a
-	fourg = 4*d - a2*(.046875*a2 - .25*b) - a*c
-
-	h = .5*e  // auxilliary cubic equation
-	i = .0625*(e*e-fourg)
-	j = -.015625*f*f
-
-	p = (i-(h2=h*h)/3) / 3  // substite with z = y - h/3
-	q = ((2*h2/27-i/3)*h+j) * .5
-
-	alpha = (sqrt(C(q*q + p*p*p)) - q) ^ (1/3)
-	z1 = alpha - p / alpha  // roots of p,q equation
-	alpha = alpha * (-.5+1.bb67ae8584cabX-001i /*exp(2i*pi()/3)*/)
-	z2 = alpha - p / alpha
-
-	h3 = h/3
-	p = sqrt(z1 - h3)  // square roots of roots of auxilliary cubic
-	q = sqrt(z2 - h3)
-	r = f/(p*q) * -.125
-
-	x = p+q+r\p-q-r\-p+q-r\-p-q+r
-	return (max(Re(select(x, Im(edittozerotol(x,1e-3)):==0)))-0.25*a)
-}
-
 mata mlib create lasdfStickyFeller, dir("`c(sysdir_plus)'l") replace
 mata mlib add lasdfStickyFeller *(), dir("`c(sysdir_plus)'l")
 mata mlib index
 end
-
+--
 * Goran test
 mata S = clsStickyFeller(); p = exp(S.lnStickyFeller(t=rangen(.1,2,20)#J(20,1,1), x=J(400,1,1), y=J(20,1,1)#rangen(.1,2,20), a=1, b=1, nu=-.25, mu=5))
 drop _all
