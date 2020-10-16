@@ -285,7 +285,7 @@ string rowvector asdfEstbernounls::getParamEstNames()
 	return (("s", "B", "delta", "lnsig"))
 
 // _Y0, _Y, _tDelta = inital & final values, and time gaps; wt = optional weights
-void asdfEstbernounls::setData(real colvector _Y0, real colvector _Y, real colvector _tDelta, | real colvector wt) {
+void asdfEstbernounls::setData(real colvector _tDelta, real colvector _Y0, real colvector _Y, | real colvector wt) {
 	Ydot = (_Y :/ _Y0) :^ (1:/_tDelta) :- 1
 	pY = &_Y0
   lnY = ln(_Y0)
@@ -632,6 +632,7 @@ real scalar asdfEststickyfeller::getlf() return(0)  // only an lf0 estimator
 // _Y0, _Y, _tDelta = inital & final values, and time gaps
 void asdfEststickyfeller::setData(real colvector Y0, real colvector Y, real colvector tDelta) {
 	pY0 = &Y0; pY  = &Y; ptDelta = &tDelta
+	S.setData(Y0, Y, tDelta)
 }
 
 string rowvector asdfEststickyfeller::getParamEstNames()
@@ -663,7 +664,7 @@ void asdfEststickyfeller::processParams(transmorphic vector params) {
 void asdfEststickyfeller::lnPDF(transmorphic vector params, real colvector lnf, | real scalar todo, real matrix g, struct smatrix h) {
 	pragma unset todo; pragma unset g; pragma unset h
 	processParams(params)
-	lnf = S.lnStickyFeller(*ptDelta, *pY0, *pY, exp(*plna), *pb, *pnu, exp(*plnmu))
+	lnf = S.lnStickyFeller(exp(*plna), *pb, *pnu, exp(*plnmu))
 }
 
 
