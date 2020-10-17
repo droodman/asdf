@@ -97,7 +97,7 @@ complex rowvector clsUPower::lnU(real scalar maxi /*complex rowvector lnC*/) {
   }
   paramDirty = 0
 
-	shift = (`=ln(1.fffffffffffffX+3fe/2/($UPower_M+1))' + ($UPower_M - nu) * lnz) :- maxrecoefs
+	shift = (lnz > 0? `=ln(1.fffffffffffffX+3fe/2/($UPower_M+1))' - ($UPower_M - nu) * lnz : `=ln(1.fffffffffffffX+3fe/2/($UPower_M+1))') :- maxrecoefs
 	return (editmissing(ln(quadcolsum(exp(coefs1 :+       mlnz :+ shift)) - 
 	                       quadcolsum(exp(coefs2 :+ mmnu * lnz :+ shift))) - shift, 0))  // return power series sum in logs; lnU(0) = 0
 }
@@ -105,7 +105,7 @@ complex rowvector clsUPower::lnU(real scalar maxi /*complex rowvector lnC*/) {
 
 class clsUAsymParam {
   pointer(complex rowvector) scalar palpha
-	real scalar nu, nuDirty, zDirty, z, lnz, oldmini
+	real scalar nu, nuDirty, zDirty, z, lnz, oldmini, beta
 	real colvector B, kB, zmInd, C2, zerotoM
 	real rowvector mlnz, zeroto3Mp1
 	pointer(real rowvector) colvector pPT
@@ -171,7 +171,7 @@ complex rowvector clsUAsymParam::lnU(real scalar mini) {
 
 	if (nuDirty) {
 		C = 1 // c_0 -- store c polynomials bottom-to-top
-		betaB = (1+nu) * B  // constant terms of binomials inside dlmf.nist.gov/13.8.E16; 1st-order terms already in kB
+		betaB = (beta=1+nu) * B  // constant terms of binomials inside dlmf.nist.gov/13.8.E16; 1st-order terms already in kB
 
 		for (m=1; m<=`=2*$UAsymParam_M+1'; m++)
 			C = (quadcross(betaB[|.\m|] , C), 0) + (0, quadcross(kB[|.\m|] , C)) \ C, J(m,1,0)  // prepend next (recursively defined) c polynomial
@@ -211,9 +211,9 @@ complex rowvector clsUAsymParam::lnU(real scalar mini) {
 	oldmini = mini
 
 	lnsqrtzdivalpha = 0.5 * (lnz :- lnalpha)
-	term = sqrt(alpha * z); term = C(term + term); lnterm = ln(term)
+	term = sqrt(alpha * z); term = term + term; lnterm = ln(term)
 	return ((1.62e42fefa39efX-001 /*ln(2)*/ + z*.5) :+ ((-nu) * lnsqrtzdivalpha - lngammaalpha + asdfLogSumExp(SBessel.lnK(  nu, term, lnterm) :+ asdfLogSumExp(lnSp :- mlnalpha) \ 
-	                                                                                                           SBessel.lnK(1+nu, term, lnterm) :+ asdfLogSumExp(lnSq :- mlnalpha) :+ lnsqrtzdivalpha)))
+	                                                                                                           SBessel.lnK(beta, term, lnterm) :+ asdfLogSumExp(lnSq :- mlnalpha) :+ lnsqrtzdivalpha)))
 }
 
 
@@ -306,7 +306,7 @@ complex rowvector clsUAsymArg::lnU(real scalar maxi) {
 
 class clsStickyFeller {
 	real colvector lnBesselKPower_0toM, lnBesselKPower_2Mto0, _t, ot, ox, oy, zerofill, zeroind, missingfill, lnx, lny, Nuniq
-	real matrix _data
+	real matrix uniqdata
 	pointer (real colvector) scalar px, py, pt
 	real scalar N, Nt
 	complex rowvector lnStickyFeller_tlambdalnu, lnStickyFeller_u2
@@ -348,12 +348,12 @@ void clsStickyFeller::setData(real colvector t, real colvector x, real colvector
 	lnx = ln(x); lny = ln(y)
 
 	N = rows(t)
-	data = t,x \ t,y
+	data = t,x,lnx \ t,y,lny
 	_collate(data, o = order(data, (1,2)))  // sort observations by t, x/y
 	tinfo   = asdfpanelsetup(data, 1    ,   tID)'
 	txyinfo = asdfpanelsetup(data, (1,2), txyID)
-	_data = data[txyinfo[,1],]  // unique t-x/y combinations
-	Nuniq = rows(_data)
+	uniqdata = data[txyinfo[,1],]  // unique t-x/y combinations
+	Nuniq = rows(uniqdata)
 	Nt = rows(_t = data[tinfo[1,],1])  // unique successive values of t
 	ot =   tID[invorder(o)[|.  \N|]]  // map from original observations to unique t's
 	ox = txyID[invorder(o)[|.  \N|]]  // map from original observations to unique t-x's
@@ -364,16 +364,16 @@ void clsStickyFeller::setData(real colvector t, real colvector x, real colvector
 
 // compute log transition density f(t; x, y) = p(t; x, y) * m(dx) for sticky Feller by applying Weideman & Trefethen (2007), Weideman (2010), parabolic contour method to sticky term of Green function
 // assumes b < 0 and t,x,y have same height
-real colvector clsStickyFeller::lnStickyFeller(real scalar a, real scalar b, real scalar nu, real scalar mu) {
+real colvector clsStickyFeller::lnStickyFeller(real scalar a, real scalar lna, real scalar b, real scalar nu, real scalar mu, real scalar lnmu) {
   real colvector hi, _mu, lnp0, negbt, lnattilde, lnm, lnJacobian, z, lnz
-	real scalar ba, _lnC, i, j, lngammanegnu, beta, _i, absb, anypower, anyasymparam, anyasymarg, oldt
+	real scalar ba, _lnC, i, j, lngammanegnu, beta, _i, absb, anypower, anyasymparam, anyasymarg, oldt, lnba
 	complex matrix alpha, G, lambda, lngammaalphamnu, K
 	complex rowvector lnM, lnUAsymParam, lnUPower, lnUAsymArg, alphaj
   class clsUPower scalar SUPower
   class clsUAsymParam scalar SUAsymParam
   class clsUAsymArg scalar SUAsymArg
 	class clsBesselKAsym SBesselKAsym
-	pragma unset oldt
+	pragma unset oldt  // will exploit that its initial value is missing
 
 	if (nu < -1 | nu > 0 | mu < 0)
 		return (.)
@@ -399,36 +399,35 @@ real colvector clsStickyFeller::lnStickyFeller(real scalar a, real scalar b, rea
 	if (rows(zerofill)) lnp0[zeroind] = missingfill  // if y=0, "absorbing term" drops out
 
 	beta = 1 + nu
-	ba = abs(b / a)
-	_editmissing(lnm = nu * lny - ba * (b < 0? *py : *px) :- ln(a), -ln(mu))  // log speed measure; takes special value of 1/mu when y = 0; b>0 modification is a hack to multiply by exp(-b/a*(x+y))
+	absb = abs(b)
+	ba = absb / a
+	_editmissing(lnm = nu * lny - ba * (b < 0? *py : *px) :- lna, -lnmu)  // log speed measure; takes special value of 1/mu when y = 0; b>0 modification is a hack to multiply by exp(-b/a*(x+y))
 // nu*lny probably re-computed in UPower()...
 
-	// Done computing asborbing term and prepping for parabolic path integral for sticky term. Now compute sticky term along parabola. For efficiency compute factors phi(x), psi(y) (same formulas) once for each t, x/y
-
-	if ((absb=abs(b)) > 1e-10) {
+	if (absb > 1e-10) {
 		SUPower     = clsUPower()    ; SUPower.setnu    (nu)
 		SUAsymParam = clsUAsymParam(); SUAsymParam.setnu(nu)
 		SUAsymArg   = clsUAsymArg()  ; SUAsymArg.setnu  (nu)
 
 		lngammanegnu = lngamma(-nu)
-		_lnC = lngamma(beta) - ln(-nu) - lngammanegnu - nu * ln(abs(b)/a)
+		_lnC = lngamma(beta) - ln(-nu) - lngammanegnu - nu * (lnba = ln(absb)-lna)
 
 		lambda = (_mu = 1.813f9e629e9c0X+000 /*log_epsilon - log_eps*/ :/ _t)  * lnStickyFeller_u2   // "mu" as in Garrappa (2015), p. 1364, not stickiness parameter
 		alpha = (lambda / -b); if (b > 0) alpha = beta :- alpha
 		lngammaalphamnu = lngamma(alpha :- nu)
-		K = -ln(lambda :/ (mu * _mu) - (nu :/ _mu) :* exp(_lnC :+ (lngammaalphamnu - lngamma(alpha))))  // K in G = K * phi(x) * phi(y); _mu is mu as in Garrappa (2015), p. 1364 (here, part of Jacobian of parabolic path function); mu is stickiness parameter
+		K = -ln(lambda :/ (mu * _mu) - (nu :/ _mu) :* exp(_lnC :+ (lngammaalphamnu - lngamma(alpha))))  // K in G = K * phi(x) * phi(y); mu is stickiness parameter; _mu is mu as in Garrappa (2015), p. 1364 (here, part of Jacobian of parabolic path function)
 
 		j = Nt + 1
 		for (i=Nuniq; i; i--) {
-			if (_data[i,1] != oldt) {
+			if (uniqdata[i,1] != oldt) {
+				oldt = uniqdata[i,1]
 				alphaj = alpha[--j,]
 				SUPower.setalpha(alphaj)
 				SUAsymParam.setalpha(alphaj)
 				SUAsymArg.setalpha(alphaj)
-				oldt = _data[i,1]
 			}
 
-			lnz = ln(z  = ba * _data[i,2])  // *** bax or bay computed for speed measure already
+			z  = ba * uniqdata[i,2]; lnz = lnba :+ uniqdata[i,3]
 		
 			// indexes in lambda after which switch from power or asymptotic-argument  to asymptotic-parameter; min value is 0
 			// Spuriously precise thresholds from benchmarking against mpmath's hyperu()
@@ -450,12 +449,14 @@ real colvector clsStickyFeller::lnStickyFeller(real scalar a, real scalar b, rea
 				SUAsymParam.setz(z, lnz)
 				lnUAsymParam = SUAsymParam.lnU(_i)
 			}
+
 			phi[i,] = z? (hi? (_i? (_i >= $StickyFeller_N? lnUAsymArg : lnUAsymArg[|.\_i|], lnUAsymParam                ) : lnUAsymParam      ) + lnM :  // value of eigenfunction factor for this t and x/y
 			                  (_i? (_i >= $StickyFeller_N? lnUPower   : lnUPower  [|.\_i|], lnUAsymParam + lnM[|_i+1\.|]) : lnUAsymParam + lnM))       :
 										zeros
 		}
 
 		G = K[ot,] + phi[ox,] + phi[oy,]
+
 	} else {  // squared Bessel/b=0 case. Would need a different approach if b could vary by observation
 
 		complex rowvector termx, lntermx, termy, lntermy, _lambda, _term, _lnterm, zerolimit; real scalar pidivsinnupi, gammanegnu2, c, _ix, _iy; real colvector ix, iy
@@ -487,7 +488,7 @@ real colvector clsStickyFeller::lnStickyFeller(real scalar a, real scalar b, rea
 			                         (_iy >= $StickyFeller_N?     lnBesselKPower(nu, lntermy)        : 
 			                                                      lnBesselKPower(nu, lntermy[|.\_iy|]), SBesselKAsym.lnK(nu, termy[|_iy+1\.|], lntermy[|_iy+1\.|]))) - nu * lntermy :
 														    zerolimit) - 
-										ln(_lambda * (gammanegnu2 / (mu * _mu[j])) - (_lambda / (a * mu[j])) :^ -nu * pidivsinnupi))
+										ln(_lambda * (gammanegnu2 / (mu * _mu[j])) - (_lambda / (a * _mu[j])) :^ -nu * pidivsinnupi))
 		}
 	}
 
@@ -557,8 +558,8 @@ mata mlib index
 end
 --
 * Goran test
-mata S = clsStickyFeller(); S.setData(t=rangen(.1,2,20)#J(20,1,1), x=J(400,1,1), y=J(20,1,1)#rangen(.1,2,20)); p = exp(S.lnStickyFeller(a=1, b=1, nu=-.25, mu=5))
+mata S = clsStickyFeller(); S.setData(t=rangen(.05,4,30)#J(30,1,1), x=J(30*30,1,1), y=J(30,1,1)#rangen(.01,2,30)); p = exp(S.lnStickyFeller(a=.5, ln(a), b=-1, nu=-.25, mu=5, ln(mu)))
 drop _all
 getmata t y p, force double replace
-twoway contour p y t, levels(500) clegend(off)
+twoway contour p y t, levels(500) clegend(off) plotregion(margin(zero))
 mata quadcolsum(p :/ (exp(b/a*y) :* y:^nu :/ a))

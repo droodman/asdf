@@ -664,7 +664,7 @@ void asdfEststickyfeller::processParams(transmorphic vector params) {
 void asdfEststickyfeller::lnPDF(transmorphic vector params, real colvector lnf, | real scalar todo, real matrix g, struct smatrix h) {
 	pragma unset todo; pragma unset g; pragma unset h
 	processParams(params)
-	lnf = S.lnStickyFeller(exp(*plna), *pb, *pnu, exp(*plnmu))
+	lnf = S.lnStickyFeller(exp(*plna), *plna, *pb, *pnu, exp(*plnmu), *plnmu)
 }
 
 
