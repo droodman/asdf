@@ -83,8 +83,11 @@ void clsUPower::setz(real scalar _z, real scalar _lnz) {
 // return value will be StickyFeller_N long; only firt maxi entries meaningful
 complex rowvector clsUPower::lnU(real scalar maxi /*complex rowvector lnC*/) {
   complex scalar _alpha; real colvector shift; complex rowvector S1, S2; real scalar _maxi
+
   _maxi = maxi > $StickyFeller_N? $StickyFeller_N : maxi
-  for (i=paramDirty? 1 : i+1; i<=_maxi; i++) {
+	if (paramDirty) i = 1
+
+  for (; i<=_maxi; i++) {
     _alpha = (*palpha)[i]
     (terms1 = ln((_alpha - 1     ) :+ m)) [1] = 0       // for making log Pochhammer symbols (alpha)_m and (alpha+1-beta)_m; edit m=0 entry to ln 1
     (terms2 = ln((_alpha - 1 - nu) :+ m)) [1] = lngamma(1+nu)-lngamma(1-nu)+lngamma(_alpha-nu)-lngamma(_alpha)  // edit m=0 entry to multiplier on second series
@@ -95,14 +98,14 @@ complex rowvector clsUPower::lnU(real scalar maxi /*complex rowvector lnC*/) {
   S1 = asdfLogSumExp(coefs1 :+        mlnz)
   S2 = asdfLogSumExp(coefs2 :+ mmnu * lnz)
   shift = 1.6232bdd7abcd2X+009 /*ln(maxdouble()/2)*/ :- colmax(Re(S1) \ Re(S2))
-  return (editmissing(ln(exp(S1 + shift) - exp(S2 + shift)) - shift, 0))  // return power series sum in logs; lnU(0) = 0
+	return (editmissing(ln(exp(S1 + shift) - exp(S2 + shift)) - shift, 0))  // return power series sum in logs; lnU(0) = 0
 }
 
 
 class clsUAsymParam {
   pointer(complex rowvector) scalar palpha
 	real scalar nu, nuDirty, zDirty, z, lnz, oldmini
-	real colvector B, kB, zmInd, C2
+	real colvector B, kB, zmInd, C2, zerotoM
 	real rowvector mlnz, zeroto3Mp1
 	pointer(real rowvector) colvector pPT
 	complex rowvector lnSp, lnSq, alpha, lnalpha, lngammaalpha, lnsqrtzdivalpha
@@ -134,6 +137,7 @@ void clsUAsymParam::new() {
 	C2 = J(`=(2*$UAsymParam_M+2)*(2*(2*$UAsymParam_M+2)-1)', 1, 0)
 	
 	zeroto3Mp1  = 0 .. `=3*$UAsymParam_M+1'
+	zerotoM     = 0 :: $UAsymParam_M
 
 	SBessel = clsBesselKAsym()
 }
@@ -200,7 +204,7 @@ complex rowvector clsUAsymParam::lnU(real scalar mini) {
 	} else if (mini != oldmini) {
 		alpha = mini? (*palpha)[|mini+1\.|] : *palpha
 		lnalpha = ln(alpha)
-		mlnalpha = (0 :: $UAsymParam_M) * lnalpha
+		mlnalpha = zerotoM * lnalpha
 		lngammaalpha = lngamma(alpha)
 	}
 	oldmini = mini
@@ -363,7 +367,7 @@ real colvector clsStickyFeller::lnStickyFeller(real scalar a, real scalar b, rea
   real colvector hi, _mu, lnp0, negbt, lnattilde, lnm, lnJacobian, z, lnz
 	real scalar ba, _lnC, i, j, lngammanegnu, beta, _i, absb, anypower, anyasymparam, anyasymarg, oldt
 	complex matrix alpha, G, lambda, lngammaalphamnu, K
-	complex rowvector lnM, lnUAsymParam, lnUPower, lnUAsymArg, alphai
+	complex rowvector lnM, lnUAsymParam, lnUPower, lnUAsymArg, alphaj
   class clsUPower scalar SUPower
   class clsUAsymParam scalar SUAsymParam
   class clsUAsymArg scalar SUAsymArg
@@ -416,10 +420,10 @@ real colvector clsStickyFeller::lnStickyFeller(real scalar a, real scalar b, rea
 		j = Nt + 1
 		for (i=Nuniq; i; i--) {
 			if (_data[i,1] != oldt) {
-				alphai = alpha[--j,]
-				SUPower.setalpha(alphai)
-				SUAsymParam.setalpha(alphai)
-				SUAsymArg.setalpha(alphai)
+				alphaj = alpha[--j,]
+				SUPower.setalpha(alphaj)
+				SUAsymParam.setalpha(alphaj)
+				SUAsymArg.setalpha(alphaj)
 				oldt = _data[i,1]
 			}
 
@@ -445,13 +449,12 @@ real colvector clsStickyFeller::lnStickyFeller(real scalar a, real scalar b, rea
 				SUAsymParam.setz(z, lnz)
 				lnUAsymParam = SUAsymParam.lnU(_i)
 			}
-
 			phi[i,] = z? (hi? (_i? (_i >= $StickyFeller_N? lnUAsymArg : lnUAsymArg[|.\_i|], lnUAsymParam                ) : lnUAsymParam      ) + lnM :  // value of eigenfunction factor for this t and x/y
 			                  (_i? (_i >= $StickyFeller_N? lnUPower   : lnUPower  [|.\_i|], lnUAsymParam + lnM[|_i+1\.|]) : lnUAsymParam + lnM))       :
 										zeros
 		}
-		G = K[ot,] + phi[ox,] + phi[oy,]
 
+		G = K[ot,] + phi[ox,] + phi[oy,]
 	} else {  // squared Bessel/b=0 case. Would need a different approach if b could vary by observation
 
 		complex rowvector termx, lntermx, termy, lntermy, _lambda, _term, _lnterm, zerolimit; real scalar pidivsinnupi, gammanegnu2, c, _ix, _iy; real colvector ix, iy
@@ -486,6 +489,7 @@ real colvector clsStickyFeller::lnStickyFeller(real scalar a, real scalar b, rea
 										ln(_lambda * (gammanegnu2 / (mu * _mu[j])) - (_lambda / (a * mu[j])) :^ -nu * pidivsinnupi))
 		}
 	}
+
 	return (asdfLogSumExpRow((lnp0 , lnm + ln(quadrowsum(asdfReexp(lnStickyFeller_tlambdalnu :+ G))))))
 }
 

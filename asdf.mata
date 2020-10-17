@@ -632,7 +632,7 @@ real scalar asdfEststickyfeller::getlf() return(0)  // only an lf0 estimator
 // _Y0, _Y, _tDelta = inital & final values, and time gaps
 void asdfEststickyfeller::setData(real colvector Y0, real colvector Y, real colvector tDelta) {
 	pY0 = &Y0; pY  = &Y; ptDelta = &tDelta
-	S.setData(Y0, Y, tDelta)
+	S.setData(tDelta, Y0, Y)
 }
 
 string rowvector asdfEststickyfeller::getParamEstNames()
