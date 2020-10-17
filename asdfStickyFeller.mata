@@ -43,6 +43,7 @@ class clsUPower {
   pointer(complex rowvector) scalar palpha
 	real scalar nu, paramDirty, lnz, i
   real colvector m, lnm, mlnz, denom1, denom2, mmnu
+	real rowvector maxrecoefs
   complex colvector terms1, terms2
   complex matrix coefs1, coefs2
   
@@ -53,6 +54,7 @@ class clsUPower {
 void clsUPower::new() {
 	lnm  = ln(m = 0::$UPower_M)
   coefs1 = coefs2 = J(`=$UPower_M+1', $StickyFeller_N, C(.))
+	maxrecoefs = J(1, $StickyFeller_N, .)
 }
 
 void clsUPower::setalpha(complex rowvector _alpha) {
@@ -82,23 +84,22 @@ void clsUPower::setz(real scalar _z, real scalar _lnz) {
 
 // return value will be StickyFeller_N long; only firt maxi entries meaningful
 complex rowvector clsUPower::lnU(real scalar maxi /*complex rowvector lnC*/) {
-  complex scalar _alpha; real colvector shift; complex rowvector S1, S2; real scalar _maxi
+  complex scalar _alpha; real rowvector shift; real scalar _maxi
 
   _maxi = maxi > $StickyFeller_N? $StickyFeller_N : maxi
 	if (paramDirty) i = 1
-
   for (; i<=_maxi; i++) {
     _alpha = (*palpha)[i]
     (terms1 = ln((_alpha - 1     ) :+ m)) [1] = 0       // for making log Pochhammer symbols (alpha)_m and (alpha+1-beta)_m; edit m=0 entry to ln 1
     (terms2 = ln((_alpha - 1 - nu) :+ m)) [1] = lngamma(1+nu)-lngamma(1-nu)+lngamma(_alpha-nu)-lngamma(_alpha)  // edit m=0 entry to multiplier on second series
-    coefs1[,i] = quadrunningsum(terms1) - denom1
-    coefs2[,i] = quadrunningsum(terms2) - denom2
+		maxrecoefs[i] = max((max(Re( coefs1[,i] = quadrunningsum(terms1) - denom1 )),
+		                     max(Re( coefs2[,i] = quadrunningsum(terms2) - denom2 ))))
   }
   paramDirty = 0
-  S1 = asdfLogSumExp(coefs1 :+        mlnz)
-  S2 = asdfLogSumExp(coefs2 :+ mmnu * lnz)
-  shift = 1.6232bdd7abcd2X+009 /*ln(maxdouble()/2)*/ :- colmax(Re(S1) \ Re(S2))
-	return (editmissing(ln(exp(S1 + shift) - exp(S2 + shift)) - shift, 0))  // return power series sum in logs; lnU(0) = 0
+
+	shift = (`=ln(1.fffffffffffffX+3fe/2/($UPower_M+1))' + ($UPower_M - nu) * lnz) :- maxrecoefs
+	return (editmissing(ln(quadcolsum(exp(coefs1 :+       mlnz :+ shift)) - 
+	                       quadcolsum(exp(coefs2 :+ mmnu * lnz :+ shift))) - shift, 0))  // return power series sum in logs; lnU(0) = 0
 }
 
 
