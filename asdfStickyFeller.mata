@@ -1,7 +1,6 @@
 global BesselKPower_M 22  // max term index in power series expansion of BesselK()
 global BesselKAsym_M 7    // max term index in asymptotic approximation of BesselK()
 global UPower_M 60        // max term index in power series expansion of U()
-global UAsymParam_M 12    // number of terms in Temme large-parameter approximation of U()
 global UAbadSesma_N  20   // number of terms in Abad-Sesma large-parameter approximation of U()
 
 scalar log_epsilon = ln(1e-15)  // Logic governing evaluation points on parabola of integration, extracted from Garrappa's mlf routine for Matlab
@@ -126,118 +125,6 @@ _alpha
 }
 
 
-class clsUAsymParam {
-  pointer(complex rowvector) scalar palpha
-	real scalar nu, nuDirty, zDirty, z, lnz, oldmini, beta
-	real colvector B, kB, zmInd, C2, zerotoM
-	real rowvector mlnz, zeroto3Mp1
-	pointer(real rowvector) colvector pPT
-	complex rowvector lnSp, lnSq, alpha, lnalpha, lnBetaalphanegnu, lnsqrtzdivalpha
-	complex matrix lnp, lnq, mlnalpha
-  class clsBesselKAsym scalar SBessel
-
-  void new(), setalpha(), setnu(), setz()
-  complex rowvector lnU()
-}
-
-void clsUAsymParam::new() {
-	real matrix PT; real scalar s
-
-	// B_i / i!, i=1 to 99, B_i = Bernoulli numbers; these are sigma_i(1) where sigma_i() is Stirling polynomial
-	B = -.5 \ 0.0833333333333333 \ 0 \ -.00138888888888889 \ 0 \ 3.30687830687831e-5 \ 0 \ -8.26719576719577e-7 \ 0 \ 2.08767569878681e-8 \ 0 \ -5.28419013868749e-10 \ 0 \ 1.33825365306847e-11 \ 0 \ -3.38968029632258e-13 \ 0 \ 8.58606205627785e-15 \ 0 \ -2.17486869855806e-16 \ 0 \ 5.50900282836023e-18 \ 0 \ -1.39544646858125e-19 \ 0 \ 3.53470703962947e-21 \ 0 \ -8.95351742703755e-23 \ 0 \ 2.26795245233768e-24 \ 0 \ -5.7447906688722e-26 \ 0 \ 1.45517247561486e-27 \ 0 \ -3.68599494066531e-29 \ 0 \ 9.33673425709505e-31 \ 0 \ -2.36502241570063e-32 \ 0 \ 5.99067176248213e-34 \ 0 \ -1.51745488446829e-35 \ 0 \ 3.84375812545419e-37 \ 0 \ -9.73635307264669e-39 \ 0 \ 2.46624704420068e-40 \ 0 \ -6.24707674182074e-42 \ 0 \ 1.58240302446449e-43 \ 0 \ -4.00827368594894e-45 \ 0 \ 1.01530758555696e-46 \ 0 \ -2.57180415824187e-48 \ 0 \ 6.51445603523381e-50 \ 0 \ -1.65013099068965e-51 \ 0 \ 4.17983062853948e-53 \ 0 \ -1.05876346677029e-54 \ 0 \ 2.68187919126077e-56 \ 0 \ -6.79327935110742e-58 \ 0 \ 1.72075776166814e-59 \ 0 \ -4.35873032934889e-61 \ 0 \ 1.10407929036847e-62 \ 0 \ -2.79666551337813e-64 \ 0 \ 7.08403650167947e-66 \ 0 \ -1.79440740828922e-67 \ 0 \ 4.5452870636111e-69 \ 0 \ -1.15133466319821e-70 \ 0 \ 2.91636477109236e-72 \ 0 \ -7.38723826349734e-74 \ 0 \ 1.8712093117638e-75 \ 0 \ -4.7398285577618e-77 \ 0 \ 1.20061259933545e-78 \ 0
-	B = -B  // in lmf.nist.gov/13.8.E16, moving sum to RHS negates terms 
-  kB = B[|2\.|] :* (1::rows(B)-1) \ 0
-
-	// Pascal's triangle
-	pPT = J($UAsymParam_M+1, 1, NULL)
-	PT = comb(0::`=$UAsymParam_M+1', 0..`=$UAsymParam_M+1')
-	for (s=1; s<=`=$UAsymParam_M+1'; s++)
-		pPT[s] = &(PT[|s,.\s,s|])
-	
-	lnp = lnq = J(`=$UAsymParam_M+1', `=3*$UAsymParam_M+2', C(.))
-	lnp[1,1] = 0; lnq[1,2] = 1.3e116bcd39e7dX+001 /* ln 1/12 */  // first-order term of q_0(z) is always z/12
-
-	zmInd = (1::`=(2*$UAsymParam_M+2)^2') + (`=2*(2*$UAsymParam_M+2)^2+2*$UAsymParam_M+2') :- `=3*(2*$UAsymParam_M+2)'*(1::`=2*$UAsymParam_M+2')#J(`=2*$UAsymParam_M+2',1,1)  // used to premultiply c_m polys by z^m and flip order
-	C2 = J(`=(2*$UAsymParam_M+2)*(2*(2*$UAsymParam_M+2)-1)', 1, 0)
-	
-	zeroto3Mp1  = 0 .. `=3*$UAsymParam_M+1'
-	zerotoM     = 0 :: $UAsymParam_M
-}
-
-// *** Does not make a locoal copy of alpha, just passed by reference
-void clsUAsymParam::setalpha(complex rowvector _alpha) {  // maybe can be dispensed with through "extends"
-	palpha = &_alpha
-	oldmini = .
-}
-
-void clsUAsymParam::setnu(real scalar _nu) {
-  if (nu != _nu) {
-    nu = _nu
-    nuDirty = 1
-  }
-}
-
-void clsUAsymParam::setz(real scalar _z, real scalar _lnz) {
-	if (lnz != _lnz) {
-    z    = _z
-    lnz  = _lnz
-		zDirty = 1
-  }
-}
-
-// log Tricomi U for large a, dlmf.nist.gov/13.8.E11
-// fails for entries of a whose real part is a negative integer because then lngamma(a) wrongly returns missing (as of 9/29/20)
-complex rowvector clsUAsymParam::lnU(real scalar mini) {
-  real colvector betaB; real scalar m, t1, t2; complex rowvector term, lnterm; real matrix C, t3
-
-	if (nuDirty) {
-		C = 1 // c_0 -- store c polynomials bottom-to-top
-		betaB = (beta=1+nu) * B  // constant terms of binomials inside dlmf.nist.gov/13.8.E16; 1st-order terms already in kB
-
-		for (m=1; m<=`=2*$UAsymParam_M+1'; m++)
-			C = (quadcross(betaB[|.\m|] , C), 0) + (0, quadcross(kB[|.\m|] , C)) \ C, J(m,1,0)  // prepend next (recursively defined) c polynomial; could redo in rationals rather than floating-point
-
-		C2[zmInd] = colshape(C, 1); C = colshape(C2, `=2*(2*$UAsymParam_M+2)-1') // by shifting right, multiply each c_m(z) poly by z^m; also flip so low-order ones at top
-
-		for (m=2; m<=`=$UAsymParam_M+1'; m++) {
-			t1 = *pPT[m]
-			t2 = exp(-lngamma(-nu :: m+.5-nu))  // exp(lngamma()) faster than gamma()!; even last entry is >0 if nu<0 so lngamma() will return right answer without converting argument to complex
-			t3 = t2 :* C[|m,m\m+m,`=3*$UAsymParam_M+1'+m|]
-			lnp[m,] = ln(C( (t1 / t2[m  ]) * t3[|.,.\m  ,.|] ))
-			lnq[m,] = ln(C( (t1 / t2[m+1]) * t3[|2,.\m+1,.|] ))
-		}
-		nuDirty = 0
-		zDirty = 1
-	}
-
-	if (zDirty) {  // evaluate all the p(z) and q(z)
-		mlnz =  lnz * zeroto3Mp1
-		lnSp = asdfLogRowSumExp(lnp :+ mlnz)
-		lnSq = asdfLogRowSumExp(lnq :+ mlnz)
-		zDirty = 0
-	}
-
-	if (mini > oldmini) {
-		t1 = mini - oldmini + 1
-		alpha   =   alpha[|t1\.|]
-		lnalpha = lnalpha[|t1\.|]
-		lnBetaalphanegnu = lnBetaalphanegnu[|t1\.|]
-		mlnalpha = mlnalpha[|.,t1\.,.|]
-	} else if (mini != oldmini) {
-		alpha = mini? (*palpha)[|mini+1\.|] : *palpha
-		lnalpha = ln(alpha)
-		lnBetaalphanegnu = lngamma(-nu) :+ (lngamma(alpha) - lngamma(alpha :- nu))  // beta as in beta function; might need digamma-based approximation for large alpha
-		mlnalpha = zerotoM * lnalpha
-	}
-	oldmini = mini
-
-	lnsqrtzdivalpha = 0.5 * (lnz :- lnalpha)
-	term = sqrt(alpha * z); term = term + term; lnterm = ln(term)
-	return ((1.62e42fefa39efX-001 /*ln(2)*/ + z*.5) :+ ((-nu) * lnsqrtzdivalpha - lnBetaalphanegnu + nu * lnterm + asdfLogSumExp(SBessel.lnK(  nu, term, lnterm) :+ asdfLogSumExp(lnSp :- mlnalpha) \ 
-	                                                                                                                             SBessel.lnK(beta, term, lnterm) :+ asdfLogSumExp(lnSq :- mlnalpha) :+ lnsqrtzdivalpha)))
-}
-
-
 class clsUAsymArg {
 	real scalar alphaDirty, nuDirty, nu, z, lnz, lngammanegnu
 	real rowvector qa, qb, qc, qd
@@ -300,9 +187,8 @@ real rowvector clsUAsymArg::QuarticRoot(real rowvector a, real rowvector b, real
 }
 
 
-
-// log Tricomi U for large a, using Temme's expansion, dlmf.nist.gov/13.8.E11
-// fails for entries of a whose real part is a negative integer because then lngamma(a) wrongly returns missing (as of 9/29/20)
+// log Tricomi U for large argument, using 2F0 expansion, dlmf.nist.gov/13.7.E3
+// fails for entries of a whose real part is a negative integer because then lngamma(a) wrongly returns missing (bug reported to Stata 9/29/20)
 complex rowvector clsUAsymArg::lnU(real scalar maxi) {
 	real rowvector Ream1, ta, ta2, ta3, absa2, Ima2, M; complex rowvector retval; real colvector m, numer; complex colvector terms; real scalar i, _maxi
 
@@ -711,7 +597,7 @@ end
 
 ---
 * Goran test
-mata S = clsStickyFeller(); S.setData(t=rangen(.1,2,20)#J(20,1,1), x=J(20*20,1,1), y=J(20,1,1)#rangen(.1,2,20)); p = exp(S.lnStickyFeller(a=1, ln(a), b=-1, nu=-.25, mu=5, ln(mu))) // pretty: (a=.2, ln(a), b=-1, nu=-.75, mu=5, ln(mu))
+mata S = clsStickyFeller(); S.setData(t=rangen(.1,2,20)#J(20,1,1), x=J(20*20,1,1), y=J(20,1,1)#rangen(.1,2,20)); p = exp(S.lnStickyFeller(a=exp(1, ln(a), b=-1, nu=-.25, mu=5, ln(mu))) // pretty: (a=.2, ln(a), b=-1, nu=-.75, mu=5, ln(mu))
 drop _all
 getmata t y p, force double replace
 twoway contour p y t, levels(500) clegend(off) plotregion(margin(zero)) scheme(s1rcolor)
