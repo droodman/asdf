@@ -633,8 +633,6 @@ real scalar asdfEststickyfeller::getlf() return(0)  // only an lf0 estimator
 void asdfEststickyfeller::setData(real colvector Y0, real colvector Y, real colvector tDelta) {
 	pY0 = &Y0; pY  = &Y; ptDelta = &tDelta
 	S.setData(tDelta, Y0, Y)
-/*external complex matrix _tlambdalnu, _K, _phix, _phiy
-_tlambdalnu= _K= _phix= _phiy = J(1,28,C(.))*/
 }
 
 string rowvector asdfEststickyfeller::getParamEstNames()

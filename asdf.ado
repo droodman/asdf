@@ -2,7 +2,7 @@
 *! Copyright (C) 2020 David Roodman
 
 // asdf: Analytical Stochastic Dynamic Framework
-// Routines for fitting and simulating univariate stochastic models with analytical statements for their distributions--Bernoulli, geometric Brownian motion
+// Routines for fitting and simulating univariate stochastic models whose distributions have analytical statements--Bernoulli, geometric Brownian motion
 // Also does Bernoulli NLS.
 
 * This program is free software: you can redistribute it and/or modify
