@@ -541,9 +541,6 @@ complex colvector asdfLogRowSumExpC(complex matrix x) {
 }
 
 
-// Re(exp(z)) but a bit faster
-real matrix asdfReexp(complex matrix z)	return (exp(Re(z)) :* cos(Im(z)))
-
 // like panelsetup() but can group on multiple columns, like sort(), and faster. But doesn't take minobs, maxobs arguments.
 // Takes third argument, a matrix in which to store standardized ID variable, starting from 1
 real matrix asdfpanelsetup(real matrix X, real rowvector cols, real colvector ID) {
