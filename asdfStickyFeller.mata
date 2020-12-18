@@ -101,26 +101,12 @@ complex rowvector clsUPower::lnU(real scalar maxi, complex rowvector lnC) {
     _alpha = (*palpha)[i]
     (terms1 = ln((_alpha - 1     ) :+ m)) [1] = 0       // for making log Pochhammer symbols (alpha)_m and (alpha+1-beta)_m; edit m=0 entry to ln 1
     (terms2 = ln((_alpha - 1 - nu) :+ m)) [1] = lnC[i]  // edit m=0 entry to multiplier on second series
-/*		maxrecoefs[i] = max((max(Re( coefs1[,i] = quadrunningsum(terms1) - denom1 )),
-		                     max(Re( coefs2[,i] = quadrunningsum(terms2) - denom2 ))))
-"_alpha"
-_alpha
-"quadrunningsum(terms1), (lngamma((_alpha -  1      ) :+ m)) :-  lngamma(_alpha - 1     )"
- quadrunningsum(terms1), (lngamma((_alpha -  1      ) :+ m)) :-  lngamma(_alpha - 1     )*/
 		coefs1[,i] =  (lngamma( _alpha       :+ m) :- lngamma(_alpha     )) - denom1
 		coefs2[,i] = ((lngamma((_alpha - nu) :+ m) :- lngamma(_alpha - nu)) - denom2) :+ lnC[i]
   }
   paramDirty = 0
 
-/*	shift = (lnz > 0? `=ln(1.fffffffffffffX+3fe/2/($UPower_M+1))' - ($UPower_M - nu) * lnz : `=ln(1.fffffffffffffX+3fe/2/($UPower_M+1))') :- maxrecoefs
-	return (editmissing(ln(quadcolsum(exp(coefs1 :+       mlnz :+ shift)) - 
-	                       quadcolsum(exp(coefs2 :+ mmnu * lnz :+ shift))) - shift, 0)) */
-/*`"strofreal(Re(exp(coefs1 :+ mlnz)),"%30.15f") :+ " + " :+ strofreal(Im(exp(coefs1 :+ mlnz)),"%30.15f") :+"j""'
-  strofreal(Re(exp(coefs1 :+ mlnz)[,1]),"%30.15g") :+ " + " :+ strofreal(Im(exp(coefs1 :+ mlnz)[,1]),"%30.15g") :+"j",strofreal(Re(quadrunningsum(exp(coefs1 :+ mlnz)[,1])),"%30.15g") :+ " + " :+ strofreal(Im(quadrunningsum(exp(coefs1 :+ mlnz)[,1])),"%30.15g") :+"j"*/
-/*"(coefs1 :+ mlnz \ coefs2 :+ (1.921fb54442d18X+001i :+ mmnu * lnz))[,6],ln(quadrunningsum(exp(coefs1 :+ mlnz \ coefs2 :+ (1.921fb54442d18X+001i :+ mmnu * lnz))[,6]))"
- (coefs1 :+ mlnz \ coefs2 :+ (1.921fb54442d18X+001i :+ mmnu * lnz))[,6],ln(quadrunningsum(exp(coefs1 :+ mlnz \ coefs2 :+ (1.921fb54442d18X+001i :+ mmnu * lnz))[,6]))*/
- 
-	return (editmissing(asdfLogSumExp(coefs1 :+ mlnz \ coefs2 :+ (1.921fb54442d18X+001i :+ mmnu * lnz)), 0))  // return power series sum in logs; lnU(0) = 0
+  return (editmissing(asdfLogSumExp(coefs1 :+ mlnz \ coefs2 :+ (1.921fb54442d18X+001i :+ mmnu * lnz)), 0))  // return power series sum in logs; lnU(0) = 0
 }
 
 
@@ -589,24 +575,3 @@ mata mlib create lasdfStickyFeller, dir("`c(sysdir_plus)'l") replace
 mata mlib add lasdfStickyFeller *(), dir("`c(sysdir_plus)'l")
 mata mlib index
 end
-
-cap mata mata drop lnUmpmath()
-mata
-complex scalar lnUmpmath(alpha, beta, z) {
-  external _alpha, _beta, _z, _t
-  _alpha=alpha; _beta=beta; _z=z; _t = C(.)
-  stata(`"python: alpha = Mata.getAt("_alpha",0,0)"')
-  stata(`"python: beta  = Mata.getAt("_beta",0,0)"')
-  stata(`"python: z     = Mata.getAt("_z",0,0)"')
-  stata(`"cap python: Mata.store("_t", complex(mp.ln(mp.hyperu(alpha, beta, z))-mp.ln(mp.hyperu(alpha, beta, 0))))"')
-  return(_t)
-}
-end
-
-
-* Goran test
-mata S = clsStickyFeller(); S.setData(t=rangen(.1,2,20)#J(20,1,1), x=J(20*20,1,1), y=J(20,1,1)#rangen(.1,2,20)); p = exp(S.lnStickyFeller(a=1, ln(a), b=-1, nu=-.25, mu=5, ln(mu))) // pretty: (a=.2, ln(a), b=-1, nu=-.75, mu=5, ln(mu))
-drop _all
-getmata t y p, force double replace
-* twoway contour p y t, levels(500) clegend(off) plotregion(margin(zero)) scheme(s1rcolor)
-mata /*quadcolsum*/(p :/ (exp(b/a*y) :* y:^nu :/ a))
