@@ -37,13 +37,13 @@ scalar N = ceil(-w * log_epsilon / (2*_pi)) + 1       // number of integration p
 scalar h = w / (N-.5)                                 // width of bars in Riemann integral; do an even number to avoid double-counting evaluation at vertex
 global StickyFeller_h  = substr(strofreal(  h, "%21x"), 1 + (  h >= 0), .)  // strip off any leading "+" to prevent syntax errors
 global StickyFeller_mu = substr(strofreal(_mu, "%21x"), 1 + (_mu >= 0), .)
-global StickyFeller_N = 1 // N
+global StickyFeller_N = N
 
 mata
 mata clear
 mata set matastrict on
 mata set mataoptimize on
-mata set matalnum on
+mata set matalnum off
 
 struct smatrix {
 	real matrix M
@@ -278,7 +278,7 @@ real scalar asdfEst::getlf() return(2)  // default is that estimator is type lf2
 void asdfEst::setData(real colvector _tDelta, real colvector _Y0, real colvector _Y) {
 	lnY0 = ln(_Y0)
 	lnY  = ln(_Y )
-	zerofill = J(length(zeroind = selectindex(!_Y)), 1, 0)  // not used in GBM
+	zerofill = J(Nzeros = length(zeroind = selectindex(!_Y)), 1, 0)  // not used in GBM
 	tDelta = _tDelta; tDelta2 = tDelta :* tDelta
 }
 
@@ -1122,7 +1122,6 @@ real colvector clsStickyFeller::lnStickyFeller(real scalar lna, real scalar b, r
 	lngammanegnu = lngamma(-nu)
 	ba = (absb = abs(b)) / (a = exp(lna))
 	_editmissing(lnm = nu * lny - ba * (b < 0? *py : *px) :- lna, -lnmu)  // log speed measure; takes special value of 1/mu when y = 0; b>0 modification is a trick to multiply by exp(-b/a*(x+y))
-
   if (todo) {
     dlnmdlna  = (lny :< .) :* (ba * (b < 0? *py : *px) :- 1)
     dlnmdb    = (lny :< .) :* (b < 0? *py / a : *px / (-a))
@@ -1173,7 +1172,7 @@ real colvector clsStickyFeller::lnStickyFeller(real scalar lna, real scalar b, r
         anypower = hi==0 & p>0; anyasymarg = hi & floorp; anyasymparam = p < $StickyFeller_N
         if (anypower) {
           SUPower.setz(z, lnz)
-          if (lnCj) {
+          if (lnCj==.) {
           	lnCj=lnC[j,]
             if (todo) {
             	dlnCdalphaj = dlnCdalpha[j,]
@@ -1182,8 +1181,8 @@ real colvector clsStickyFeller::lnStickyFeller(real scalar lna, real scalar b, r
           }
           lnUSmallalpha = SUPower.lnU(floorp+1, lnCj, todo, dlnCdalphaj, dlnCdnuj, dlnUdalphaSmall, dlnUdnuSmall, dlnUdlnzSmall)
         } else if (anyasymarg) {
-          SUAsymArg.setz(z, lnz, todo, dlnUdalphaSmall, dlnUdnuSmall, dlnUdlnzSmall)
-          lnUSmallalpha = SUAsymArg.lnU(floorp+1)
+          SUAsymArg.setz(z, lnz)
+          lnUSmallalpha = SUAsymArg.lnU(floorp+1, todo, dlnUdalphaSmall, dlnUdnuSmall, dlnUdlnzSmall)
         }
 
         if (anyasymparam) {
@@ -1233,7 +1232,6 @@ real colvector clsStickyFeller::lnStickyFeller(real scalar lna, real scalar b, r
 
   terms = (tlambdalnu :+ lnK)[ot,] + phi[ox,] + phi[oy,]
   lnsticky = asdfLogRowSumExpC(terms)
-
   if (todo) {
     terms = terms :- lnsticky
     
@@ -1245,9 +1243,11 @@ real colvector clsStickyFeller::lnStickyFeller(real scalar lna, real scalar b, r
     dnu   = quadrowsum(exp(terms + ln(dlnKdnu  [ot,] + dphidnu  [ox,] + dphidnu [oy,]))) + dlnmdnu
     dlnmu = quadrowsum(exp(terms + ln(dlnKdlnmu[ot,]                                 ))) + dlnmdlnmu
 
+complex matrix retvalc
     lnsticky = lnm + lnsticky  // add log speed measure: p = m * f
-    retval = Re(asdfLogRowSumExpC((lnp0, lnsticky)))  // Add asborbing & sticky terms. In theory can take Re() sooner, but in extreme cases imprecision makes Bromwich sum <0, throwing us into C and generating discontinuity
-    g  = Re(editmissing((exp(lnp0 :+ ln(C(g)) :- retval),J(rows(g),1,0)),0) + exp(lnsticky - retval :+ ln((dlna, db, dnu, dlnmu))))
+    retvalc = asdfLogRowSumExpC((lnp0, lnsticky))  // Add asborbing & sticky terms. In theory can take Re() sooner, but in extreme cases imprecision makes Bromwich sum <0, throwing us into C and generating discontinuity
+    g  = Re((editmissing(exp(lnp0 :+ ln(C(g)) :- retvalc),0),J(rows(g),1,0)) + exp(lnsticky - retvalc :+ ln((dlna, db, dnu, dlnmu))))
+    retval = Re(retvalc)
   } else
     retval = Re(asdfLogRowSumExpC((lnp0, lnsticky + lnm)))  // add log speed measure: p = m * f, then add absorbing term
   return(retval)
@@ -1268,10 +1268,10 @@ complex rowvector clsStickyFeller::lnBesselKPower(real scalar nu, complex rowvec
                 asdfLogSumExp(asdfLogSumExp((twomlnhalfz :+ nu * (1.62e42fefa39efX-000 /*ln 4*/ :- 2*lnz)) :- quadrunningsum(InegnuDenom)) \ 
 	                            asdfLogSumExp( twomlnhalfz                                                   :- quadrunningsum(   InuDenom)) :+ 1.921fb54442d18X+001i /*pi i*/))
 }
-
-/*S =clsStickyFeller()
-S.setData(1\1,1\0,1\0)
-lna=0;b=-.1;nu=-.25;lnmu=.01
+/*
+S =clsStickyFeller()
+S.setData(1\1,0\0,.25\.5)
+lna=8.079043;b= -12.78574;nu=-.8547577;lnmu=-20.77465
 (void) S.lnStickyFeller(lna,b,nu,lnmu,1,g=.) ; g
 h=.0001;(S.lnStickyFeller(lna+h,b,nu,lnmu,0) - S.lnStickyFeller(lna,b,nu,lnmu,0))/h
 h=.0001;(S.lnStickyFeller(lna,b+h,nu,lnmu,0) - S.lnStickyFeller(lna,b,nu,lnmu,0))/h
@@ -1433,6 +1433,12 @@ void asdfEststickyfeller::lnPDF(transmorphic vector params, real colvector lnf, 
 	pragma unset todo; pragma unset g; pragma unset h
 	processParams(params)
 	lnf = S.lnStickyFeller(*plna, *pb, *pnu, *plnmu, todo, g)
+/*"*plna, *pb, *pnu, *plnmu"
+*plna, *pb, *pnu, *plnmu
+"lnf"
+lnf
+"g"
+g*/
 }
 
 
