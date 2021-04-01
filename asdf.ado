@@ -86,14 +86,17 @@ program define asdf, eclass
 
 	local _options `options'
 	local 0, `model'
-	syntax, [bernoudiff bernoudiff2 gbm bernounls stickyfeller stickysqbessel]
+	syntax, [bernoudiff bernoudiff2 gbm bernounls stickyfeller stickysqbessel feller]
 	local options `_options'
 
 	mata S = asdfEst`model'()
 	if `"`lf'"'=="" mata st_local("lf", strofreal(S.getlf()))
 
   if "`model'" == "bernounls" {
-    mata S.setData("`modeltype'"=="dynamic"? st_data(., "`x0'", "`touse'") : st_numscalar("`x0'"), st_data(., "`x'" , "`touse'"), st_data(., "`tdelta'" , "`touse'") `=cond("`wtype'" != "", `", st_data(., "`wvar'" , "`touse'")"', "")')
+    mata S.setData(st_data(., "`tdelta'" , "`touse'"),  ///
+                   ("`modeltype'"=="dynamic"? st_data(., "`x0'", "`touse'") : st_numscalar("`x0'")), ///
+                   st_data(., "`x'" , "`touse'") ///
+                   `=cond("`wtype'" != "", `", st_data(., "`wvar'" , "`touse'")"', "")')
     tempvar b V
     if "`from'" != "" mata S.Estimate(st_matrix("`from'"))
                  else mata S.Estimate()
@@ -108,7 +111,9 @@ program define asdf, eclass
     else error 430
   }
   else {
-    mata S.setData("`modeltype'"=="dynamic"? st_data(., "`x0'", "`touse'") : st_numscalar("`x0'"), st_data(., "`x'" , "`touse'"), st_data(., "`tdelta'" , "`touse'"))
+    mata S.setData(st_data(., "`tdelta'" , "`touse'"), ///
+                   ("`modeltype'"=="dynamic"? st_data(., "`x0'", "`touse'") : st_numscalar("`x0'")), ///
+                   st_data(., "`x'" , "`touse'"))
     mata st_local("params", invtokens(S.getParamEstNames()))
     foreach param in `params' {
       local syntaxopts `syntaxopts' `=upper("`param'")'VARs(varlist ts fv)

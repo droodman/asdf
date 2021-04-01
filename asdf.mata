@@ -23,11 +23,27 @@
 // Class asdfSim is for simulation, asdfEst for estimation. Both are extended to child classes specific to each model.
 //
 
+// Compile-time parameters for sticky Feller routines
+global BesselKPower_M 22 // max term index in power series expansion of BesselK()
+global BesselKAsym_M 7   // max term index in asymptotic approximation of BesselK()
+global UPower_M 60       // max term index in power series expansion of U()
+global UAbadSesma_N 20   // number of terms in Abad-Sesma large-parameter approximation of U()
+
+scalar log_epsilon = ln(1e-15)                        // Logic governing evaluation points on parabola of integration, extracted from Garrappa's mlf routine for Matlab
+mata st_numscalar("log_eps", ln(epsilon(1)))
+scalar _mu = log_epsilon - log_eps                    // mu as in Trefethen and Weideman, scaling parabola, not stickiness parameter mu
+scalar w = sqrt(-log_eps / _mu)                       // half-width of integration range, needed to assure given precision
+scalar N = ceil(-w * log_epsilon / (2*_pi)) + 1       // number of integration points (on positive arm of parabola)
+scalar h = w / (N-.5)                                 // width of bars in Riemann integral; do an even number to avoid double-counting evaluation at vertex
+global StickyFeller_h  = substr(strofreal(  h, "%21x"), 1 + (  h >= 0), .)  // strip off any leading "+" to prevent syntax errors
+global StickyFeller_mu = substr(strofreal(_mu, "%21x"), 1 + (_mu >= 0), .)
+global StickyFeller_N = 1 // N
+
 mata
 mata clear
 mata set matastrict on
 mata set mataoptimize on
-mata set matalnum off
+mata set matalnum on
 
 struct smatrix {
 	real matrix M
@@ -259,10 +275,10 @@ class asdfEst {  // SDE model with analytically expressible distribution
 real scalar asdfEst::getlf() return(2)  // default is that estimator is type lf2
 
 // _Y0, _Y, _tDelta = inital & final values, and time gaps
-void asdfEst::setData(real colvector _Y0, real colvector _Y, real colvector _tDelta) {
+void asdfEst::setData(real colvector _tDelta, real colvector _Y0, real colvector _Y) {
 	lnY0 = ln(_Y0)
 	lnY  = ln(_Y )
-	zerofill = J(length(zeroind = selectindex(_Y:==0)), 1, 0)  // not used in GBM
+	zerofill = J(length(zeroind = selectindex(!_Y)), 1, 0)  // not used in GBM
 	tDelta = _tDelta; tDelta2 = tDelta :* tDelta
 }
 
@@ -407,7 +423,7 @@ void asdfEstbernoudiff::processParams(transmorphic vector params) {
     bdivexpm1bt = 0
 	} else {
 		lnC = ln(bdivexpm1bt = editmissing(*pb :/ expm1(bt), 0))
-		if (length(ind = selectindex(*pb :== 0)))
+		if (length(ind = selectindex(!*pb)))
 			lnC[ind] = -ln(tDelta[ind])
 		if (length(ind = selectindex(bt:>1.628b76e3a78f2X+009 /* ln(maxdouble())*/)))  // for large bt, expm1(bt) overflows
 			lnC[ind] = (ln(*pb) :- bt)[ind]
@@ -510,6 +526,758 @@ real colvector asdfEstbernoudiff::CDF() {
 real colvector asdfEstbernoudiff::invCDF(real colvector p)
 	return ((invCDFFeller((*pgamma>0? p : 1:-p), *pnu, lnlambda, reflect) :- lnC) :* *pgamma)
 
+
+// class for estimation of Feller diffusion as special case of Bernoulli diffusion with gamma=1
+
+class asdfEstfeller extends asdfEstbernoudiff {
+	virtual void getScalarParams(), getSmatrixParams(), lnPDF()
+	virtual string rowvector getParamEstNames()
+	void new()
+}
+
+void asdfEstfeller::new()
+	params = smatrix(3,1)  // pre-allocated parameter vessel
+	
+string rowvector asdfEstfeller::getParamEstNames()
+	return (("lna", "b", "nu"))
+
+void asdfEstfeller::getScalarParams(real vector params) {
+	plna = &(params[1]); pb = &(params[2]); pnu = &(params[3]); pgamma = &1
+}
+
+void asdfEstfeller::getSmatrixParams(struct smatrix vector params) {
+	plna = &(params[1].M); pb = &(params[2].M); pnu = &(params[3].M); pgamma = &1
+}
+
+// log likelihoods and optionally, 1st & 2nd derivatives thereof; based on asdfEstbernoudiff(), taking gamma=1 and dropping it as a parameter
+void asdfEstfeller::lnPDF(transmorphic vector params, real colvector lnf, | real scalar todo, real matrix g, struct smatrix h) {
+	real scalar N
+	real colvector tmp1, dlnCdb, dlnfdnu, dlnfdlnlambda, dlnfdlnx, dlngdlna, dlnfdb, nogrowth, 
+		d2nulnlambda, d2nulnx, d2lnlambda2, d2lnlambdalnx, d2lnx2, d2lnCdb2, btdivexpm1bt
+	pragma unset todo; pragma unset g; pragma unset dlnfdnu; pragma unset dlnfdlnlambda; pragma unset dlnfdlnx
+	pragma unset d2nulnlambda; pragma unset d2nulnx; pragma unset d2lnlambda2; pragma unset d2lnlambdalnx; pragma unset d2lnx2
+
+	if (todo == .) todo = 0
+	processParams(params)
+
+	if (reflect) {
+		if (any(*pnu :< -1)) {
+			lnf = J(max((rows(*pnu),rows(lnlambda),rows(lnx))), 1, .)
+			if (todo)
+				g = J(1, 3, lnf)
+      return
+		}
+	} else if (any(*pnu :> 0)) {
+		lnf = J(max((rows(*pnu),rows(lnlambda),rows(lnx))), 1, .)
+		if (todo)
+			g = J(1, 3, lnf)
+		return
+	}
+
+  h = smatrix(3,3); h[3,3].M=J(0,1,0)
+	lnf = lnPDFFeller(*pnu, lnlambda, lnx, reflect, todo, dlnfdnu, dlnfdlnlambda, dlnfdlnx, h[3,3].M, d2nulnlambda, d2nulnx, d2lnlambda2, d2lnlambdalnx, d2lnx2)
+	if (Nzeros) lnC[zeroind] = zerofill  // when x = 0, the probability, if non-missing, is a point mass; don't adjust with Jacobian
+	lnf = lnf + lnC
+
+	if (todo) {
+		if (*pb==0) {
+			dlnCdb  = tDelta * (-.5)
+      btdivexpm1bt = 0
+		} else {
+      btdivexpm1bt = editmissing(bt :/ expm1(-bt), 0)        // here, precision is excellent as b->0
+			dlnCdb  = (1 :+ btdivexpm1bt) :/ *pb   // here, not so much
+			if (N = length(nogrowth = selectindex(abs(bt) :< 1e-14)))
+				dlnCdb[nogrowth] = -.5 * (rows(tDelta)>1? tDelta[nogrowth] : J(N, 1, tDelta))
+		}
+
+		dlngdlna = dlnfdlnx :+ 1; if (Nzeros) dlngdlna[zeroind] = zerofill
+		dlngdlna = dlngdlna  :+ dlnfdlnlambda
+		dlnfdb = dlnfdlnlambda :* tDelta + dlnCdb :* dlngdlna
+		g = -dlngdlna, dlnfdb, dlnfdnu
+ 
+		if (todo > 1) {
+			d2lnCdb2 =  (tDelta :* btdivexpm1bt :* bdivexpm1bt :+ 1):/(-*pb :* *pb)
+			if (N = length(nogrowth = selectindex(abs(bt) :< .45e-3)))
+  			d2lnCdb2[nogrowth] = tDelta2[nogrowth] * -1.5555555555555X-004  // -t^2/12
+
+			h[1,1].M = (tmp1 = d2lnlambda2 :+ d2lnlambdalnx) + (d2lnlambdalnx :+ d2lnx2)
+			h[1,2].M = -dlnCdb:*h[1,1].M :- tDelta:*tmp1
+			h[1,3].M = -d2nulnlambda :- d2nulnx
+			h[2,2].M =  tDelta2:*d2lnlambda2 :+ ((tDelta+tDelta):*tmp1 :+ dlnCdb:*h[1,1].M):*dlnCdb :+ d2lnCdb2:*dlngdlna
+			h[2,3].M =  (dlnCdb:+tDelta):*d2nulnlambda :+ dlnCdb:*d2nulnx
+			// h[3,3].M =  d2nu2
+		}
+	}
+}
+
+///
+/// Sticky Feller routines
+///
+
+// Class for computing complex-argument digamma
+
+class clsdigamma {
+	real rowvector B
+  real colvector k, zero2seven, one2seven
+	void new()
+	complex matrix psi()
+}
+
+void clsdigamma::new() {
+  // coefficients and exponents in asymptotic power series, Zhang & Jin (1996), (3.3.14)
+  B = -0.5, -1.5555555555555X-004, 1.1111111111111X-007, -1.0410410410410X-008, 1.1111111111111X-008, -1.f07c1f07c1f08X-008, 1.5995995995996X-006, -1.5555555555555X-004, 1.c5e5e5e5e5e5eX-002
+  k = -1 \ -2 * (1::8)
+  zero2seven = 0::7
+  one2seven = 1::7
+}
+
+// digamma function for complex argument, based on Zhang and Jin (1996), section 3.3.4
+// for simplicity, it *always* applies the recurrence relation 8 times to scaffold to a large (>8) argument appropriate for the asymptotic formula
+// this makes it behave smoothly, except when Re(z)=0 toggles usage of the reflection formula
+// *** will return large values for non-positive integers but not infinity (missing)
+complex matrix clsdigamma::psi(complex matrix z) {
+  real scalar i,j; complex scalar lnz; complex matrix retval; real matrix Rez
+
+  Rez = Re(z)
+  retval = J(i=rows(z),cols(z),C(.))
+  for (;i;i--)
+    for (j=cols(z);j;j--)
+      if (Rez[i,j] >= 0) {
+        lnz = ln(8 + z[i,j])
+        retval[i,j] = lnz + B * exp(lnz * k) - quadcolsum(1 :/ (zero2seven :+ z[i,j]))  // asymptotic power series + recurrence relation
+      } else {  // exploit reflection formula in case getting near the negative real axis
+        lnz = ln(8 - z[i,j])
+        retval[i,j] = lnz + B * exp(lnz * k) - quadcolsum(1 :/ (one2seven  :- z[i,j])) - 1.921fb54442d18X+001 /*pi*/ / tan(1.921fb54442d18X+001 /*pi*/ * z[i,j])  // asymptotic power series + recurrence relation + reflection formula
+      }
+  return(retval)
+}
+
+
+// Class for large-argument Bessel K asymptotic expansion
+
+class clsBesselKAsym {
+	real colvector k, twokm1sq
+	void new()
+	complex rowvector lnK()
+}
+
+void clsBesselKAsym::new() {
+	k = 0::$BesselKAsym_M
+	twokm1sq = 2*k :- 1; twokm1sq = twokm1sq :* twokm1sq
+	k = ln(8 * k)
+}
+
+// Compute log (K_nu(z)/z^nu) with asymptotic formula for large argument (here, -1<nu<1 ASSUMED) and complex argument z, dlmf.nist.gov/10.40.E2
+// doesn't handle z = 0 
+// max series length index bounds from Zhang and Jin's CIKVB @ people.sc.fsu.edu/~jburkardt/f_src/special_functions/special_functions.f90
+// This code only takes first 8 terms of series, which they recommend for abs(z) > 50.
+complex rowvector clsBesselKAsym::lnK(real scalar nu, complex rowvector z, complex rowvector lnz,| real scalar todo, complex rowvector dlnKdnu, complex rowvector dlnKdlnz) {
+  real scalar twonu, i; complex matrix terms, dtermsdnu, dtermsdlnz; complex rowvector retval; complex colvector termsi, fourkmfourksq
+
+  if (nu == -.5 | nu == .5)
+		if (todo == 1) {
+      fourkmfourksq = C(1 :- twokm1sq)
+      if (nu == .5) {
+        (terms      = J(1, i=cols(z),    ln(fourkmfourksq) - k) :- lnz)[1,] = retval = -lnz - z  // log of first term, including outer multipliers
+        (dtermsdnu  = J(1, i        ,  4 :/ fourkmfourksq)         )[1,] = -lnz
+        dlnKdlnz = -1 :- z
+      } else {
+        (terms      = J(1, i=cols(z),    ln(fourkmfourksq) - k) :- lnz     )[1,] = retval = -z  // log of first term, including outer multipliers
+        (dtermsdnu  = J(1, i        , -4 :/ fourkmfourksq)                 )[1,] = -lnz
+        dlnKdlnz = -z
+      }
+      dlnKdnu = J(1,i,C(.))
+      for (;i;i--) {
+        dlnKdnu[i] = quadcolsum(exp(quadrunningsum(terms[,i] :- retval[i], 1) + ln(quadrunningsum(dtermsdnu[,i], 1))))
+        retval[i] = 1.ce6bb25aa1312X-003 /*ln(sqrt(pi/2))*/ + retval[i]
+      }
+      return(retval)
+    } else
+      return(1.ce6bb25aa1312X-003 /*ln(sqrt(pi/2))*/ :- ((nu + .5) * lnz + z))
+
+	twonu = nu + nu
+	(terms = J(1, i=cols(z), ln(C(twonu*twonu :- twokm1sq)) - k) :- lnz)[1,] = (-.5 - nu) * lnz - z  // log of first term, including outer multipliers
+  if (todo == 1) {
+    (dtermsdnu  = J(1, i, C((4*twonu) :/ (twonu*twonu :- twokm1sq)))) [1,] = -lnz
+    (dtermsdlnz = J(`=1+$BesselKAsym_M', i, C(-1)))[1,] = (-.5 - nu) :- z
+  }
+
+	retval = J(1,i,C(.))
+  if (todo == 1) {
+    dlnKdnu = dlnKdlnz = J(1,i=cols(z),C(.))
+    for (;i;i--) {
+      termsi = quadrunningsum(terms[,i], 1)
+      retval[i] = asdfLogSumExp(termsi)
+      termsi = termsi :- retval[i]
+      dlnKdnu [i] = quadcolsum(exp(termsi + ln(quadrunningsum(dtermsdnu [,i], 1))))
+      dlnKdlnz[i] = quadcolsum(exp(termsi + ln(quadrunningsum(dtermsdlnz[,i], 1))))
+      retval[i] = 1.ce6bb25aa1312X-003 /*ln(sqrt(pi/2))*/ + retval[i]
+    } 
+  } else
+    for (;i;i--)
+      retval[i] = 1.ce6bb25aa1312X-003 + asdfLogSumExp(quadrunningsum(terms[,i], 1))
+	return(retval)
+}
+
+// Class for standard power series expansion of Tricomi U function
+// Returns log. Normalized so U(a,b,0)=1
+
+class clsUPower {  
+  pointer(complex rowvector) scalar palpha
+	real scalar nu, paramDirty, lnz, i
+  real colvector m, lnm, mlnz, denom1, denom2, mmnu, mpnu, ddenom1dnu, ddenom2dnu
+  complex matrix coefs1, coefs2, dcoefs1dalpha, dcoefs2dalpha, dcoefs1dnu, dcoefs2dnu
+
+  void new(), setalpha(), setnu(), setz()
+  complex rowvector lnU()
+}
+	
+void clsUPower::new() {
+	lnm  = ln(m = 0::$UPower_M)
+  dcoefs1dalpha = dcoefs2dalpha = dcoefs1dnu = dcoefs2dnu = coefs1 = coefs2 = J(`=$UPower_M+1', $StickyFeller_N, C(.))
+}
+
+void clsUPower::setalpha(complex rowvector _alpha) {
+	if (palpha==NULL)
+  	palpha = &_alpha
+  else if (cols(*palpha) != cols(_alpha) | (*palpha)[1] != _alpha[1])
+  	palpha = &_alpha
+  paramDirty = 1
+}
+
+void clsUPower::setnu(real scalar _nu) {
+  if (nu != _nu) {
+    nu = _nu
+    paramDirty = 1
+    denom1 = quadrunningsum(ln(mpnu =  nu :: $UPower_M.5 + nu) + lnm)  // first entry will be 0 since lnm[1]=.
+    denom2 = quadrunningsum(ln(mmnu = -nu :: $UPower_M.5 - nu) + lnm)
+    
+    (ddenom1dnu =   1  :/ mpnu)[1] = 0; ddenom1dnu = quadrunningsum(ddenom1dnu)
+    (ddenom2dnu = (-1) :/ mmnu)[1] = 0; ddenom2dnu = quadrunningsum(ddenom2dnu)
+  }
+}
+
+void clsUPower::setz(real scalar _z, real scalar _lnz) {
+	pragma unused _z
+  if (lnz != _lnz) {
+    lnz = _lnz
+    mlnz = m * lnz
+  }
+}
+
+// return value will be StickyFeller_N long; only firt maxi entries meaningful
+complex rowvector clsUPower::lnU(real scalar maxi, complex rowvector lnC, real scalar todo, | complex rowvector dlnCdalpha, complex rowvector dlnCdnu, complex rowvector dlnUdalpha, complex rowvector dlnUdnu, complex rowvector dlnUdlnz) {
+  complex scalar _alpha; real scalar _maxi; complex rowvector retval; complex matrix terms; complex colvector dterms2dnu, dterms1dalpha, dterms2dalpha, terms1, terms2, alpham1pm, alpham1mnupm
+
+  _maxi = maxi > $StickyFeller_N? $StickyFeller_N : maxi
+	if (paramDirty) i = 1
+  for (; i<=_maxi; i++) {
+    _alpha = (*palpha)[i]
+    alpham1pm    = (_alpha - 1     ) :+ m
+    alpham1mnupm = (_alpha - 1 - nu) :+ m
+
+    (terms1 = ln(alpham1pm   ))[1] = 0       // for making log Pochhammer symbols (alpha)_m and (alpha+1-beta)_m; edit m=0 entry to ln 1
+    (terms2 = ln(alpham1mnupm))[1] = lnC[i]  // edit m=0 entry to multiplier on second series
+
+		coefs1[,i] = quadrunningsum(terms1) - denom1
+		coefs2[,i] = quadrunningsum(terms2) - denom2
+
+    if (todo == 1) {
+      (dterms1dalpha =   1  :/ alpham1pm   )[1] = 0
+      (dterms2dalpha =   1  :/ alpham1mnupm)[1] = dlnCdalpha[i]
+      (dterms2dnu    = (-1) :/ alpham1mnupm)[1] = dlnCdnu   [i]
+
+      dcoefs1dalpha[,i] = quadrunningsum(dterms1dalpha)
+      dcoefs2dalpha[,i] = quadrunningsum(dterms2dalpha)
+      dcoefs1dnu   [,i] =                               - ddenom1dnu
+      dcoefs2dnu   [,i] = quadrunningsum(dterms2dnu   ) - ddenom2dnu
+    }
+  }
+
+  terms = coefs1 :+ mlnz \ coefs2 :+ (1.921fb54442d18X+001i /*ln -1*/ :+ mmnu * lnz)
+  retval = editmissing(asdfLogSumExp(terms), 0)
+
+  if (todo == 1) {
+    terms = terms :- retval
+    dlnUdalpha = quadcolsum(exp(terms  + ln(dcoefs1dalpha \ dcoefs2dalpha    )))
+    dlnUdnu    = quadcolsum(exp(terms  + ln(dcoefs1dnu    \ dcoefs2dnu :- lnz)))
+    dlnUdlnz   = quadcolsum(exp(terms :+ ln(m             \ mmnu             )))
+  }
+  paramDirty = 0
+  return(retval)  // return power series sum in logs; lnU(0) = 0
+}
+
+
+// Class for asymptotic large-argument expansion of Tricomi U function.
+// Returns log. Normalized so U(a,b,0)=1
+
+class clsUAsymArg {
+	real scalar alphaDirty, nuDirty, nu, z, lnz, lngammanegnu, dlngammanegnudnu
+	real rowvector qa, qb, qc, qd
+	complex rowvector lngammaalphamnu
+	pointer(complex rowvector) scalar palpha
+  class clsdigamma scalar Sdigamma
+
+  void setalpha(), setnu(), setz()
+  complex rowvector lnU()
+	real rowvector QuarticRoot()
+}
+
+// *** Doesn't make a local copy of alpha, just takes by reference
+void clsUAsymArg::setalpha(complex rowvector _alpha) {  // maybe can be dispensed with through "extends"
+	palpha = &_alpha
+	alphaDirty = 1
+}
+
+void clsUAsymArg::setnu(real scalar _nu) {
+  if (nu != _nu) {
+    nu = _nu
+		lngammanegnu = lngamma(-nu)
+    dlngammanegnudnu = -digamma(-nu)
+    nuDirty = 1
+  }
+}
+
+void clsUAsymArg::setz(real scalar _z, real scalar _lnz) {
+	if (lnz != _lnz) {
+		  z  =   _z
+    lnz  = _lnz
+	}
+}
+
+// Find highest real root of a quartic equation using Euler's method, mathforum.org/dr.math/faq/faq.cubic.equations.html
+real rowvector clsUAsymArg::QuarticRoot(real rowvector a, real rowvector b, real rowvector c, real rowvector d) {
+  real rowvector e, f, fourg, h, i, j, a2, h2, h3; complex rowvector alpha, z1, z2, p, q, r; complex matrix x
+
+	    e = b - .375*(a2=a:*a)  // substitute with y = x - b/4
+	    f = c + (.125*a2 - .5*b):*a
+	fourg = 4*d - a2:*(.046875*a2 - .25*b) - a:*c
+
+	h = .5*e  // auxilliary cubic equation
+	i = .0625*(e:*e-fourg)
+	j = -.015625*f:*f
+
+	p = (i-(h2=h:*h)/3) / 3  // substite with z = y - h/3
+	q = (((2/27)*h2-i/3):*h+j) * .5
+
+	alpha = (sqrt(C(q:*q + p:*p:*p)) - q) :^ (1/3)
+	z1 = alpha - p :/ alpha  // roots of p,q equation
+	alpha = alpha * (-.5+1.bb67ae8584cabX-001i /*exp(2i*pi()/3)*/)
+	z2 = alpha - p :/ alpha
+
+	h3 = h/3
+	p = sqrt(z1 - h3)  // square roots of roots of auxilliary cubic
+	q = sqrt(z2 - h3)
+	r = f:/(p:*q) * -.125
+
+	x = p+q+r\p-q-r\-p+q-r\-p-q+r
+	return (colmax(Re(x) :* abs(Im(x):<1e-3))-0.25*a)
+}
+
+
+// log Tricomi U for large argument, using 2F0 expansion, dlmf.nist.gov/13.7.E3
+// fails for entries of whose real part is a negative integer because then lngamma(a) wrongly returns missing (bug reported to Stata 9/29/20)
+complex rowvector clsUAsymArg::lnU(real scalar maxi, | real scalar todo, complex rowvector dlnUdalpha, complex rowvector dlnUdnu, complex rowvector dlnUdlnz) {
+	real rowvector Ream1, ta, ta2, ta3, absa2, Ima2, M; complex rowvector retval; real colvector m, numer; complex colvector dtermsdalpha0, dtermsdnu0, psi, terms, termsi, dnumerdnu, dtermsdnu, dtermsdalpha, dtermsdlnz, mpalpham1, mpalpham1mnu; real scalar i, _maxi; complex scalar _alpha
+
+	if (alphaDirty) {
+		Ream1 = Re(*palpha) :- 1; absa2 = abs(*palpha); absa2 = absa2:*absa2; Ima2 = Im(*palpha); Ima2 = Ima2:*Ima2; ta3 = (absa2-Ream1-Ream1) :- 1
+	}
+	if (alphaDirty | nuDirty) {
+		lngammaalphamnu = lngamma(*palpha :- nu)
+
+		ta = Ream1 :- (2+nu); ta2 = ta:*ta + Ima2
+		qa = 2*(Ream1+ta); qb = ta3+ta2+4*Ream1:*ta; qc = 2*(Ream1:*ta2+ta:*ta3); qd = ta3:*ta2  // coefficients of quartic equation governing when norm of ratio of successive terms is 1
+	}
+  _maxi = maxi > $StickyFeller_N? $StickyFeller_N : maxi
+	M = QuarticRoot(qa[|.\_maxi|], qb[|.\_maxi|] :- z*z, qc[|.\_maxi|], qd[|.\_maxi|])  // indexes about where terms start to permanently increase
+
+	retval = J(1, cols(M), C(.))
+  if (todo == 1) {
+  	dlnUdnu = dlnUdalpha = dlnUdlnz = retval
+    psi = Sdigamma.psi(*palpha :- nu)
+    dtermsdnu0 = -psi :- dlngammanegnudnu
+    dtermsdalpha0 = psi :- lnz
+  }
+
+  if (all(M:<1e6))  // check if too many terms needed for this approach; if so return missing; probably need Temme's expansion for large alpha and z, which I have not implemented
+    for (i=cols(M);i;i--) {
+    	_alpha = (*palpha)[i]
+      m = 0 :: M[i]
+      mpalpham1 = m :+ (_alpha - 1)
+      mpalpham1mnu = m :+ (_alpha - 1 - nu)
+      numer = ln(mpalpham1) + ln(mpalpham1mnu) - ln(m)  // scope for saving and reusing these when only z changes
+      (terms = numer :- (1.921fb54442d18X+001i /*pi i*/ + lnz))[1] = lngammaalphamnu[i] - lngammanegnu - _alpha * lnz
+      retval[i] = asdfLogSumExp(termsi = quadrunningsum(terms))
+
+      if (todo == 1) {
+      	dnumerdnu     = 1 :/ mpalpham1mnu
+        (dtermsdnu    =                 -dnumerdnu)[1] = dtermsdnu0
+        (dtermsdalpha = 1 :/ mpalpham1 + dnumerdnu)[1] = dtermsdalpha0
+        dtermsdlnz    = -_alpha :- m
+
+        termsi = termsi :- retval[i]
+        dlnUdnu   [i] = quadcolsum(exp(termsi + ln(quadrunningsum(dtermsdnu   ))))
+        dlnUdalpha[i] = quadcolsum(exp(termsi + ln(quadrunningsum(dtermsdalpha))))
+        dlnUdlnz  [i] = quadcolsum(exp(termsi + ln(               dtermsdlnz   )))
+      }
+    }
+	alphaDirty = nuDirty = 0
+	return (retval)
+}
+
+// Class for Abad and Sesma (1997) large-order (large alpha) expansion of (log) Tricomi U function
+// Normalized so U(a,b,0)=1
+
+class clsUAbadSesma {
+  real scalar nu, z, lnz, nuDirty, beta
+	real colvector B, f, dfdnu
+  complex colvector g, dgdlnz
+  pointer(complex rowvector) scalar palpha
+  class clsBesselKAsym scalar S
+
+  void new(), setalpha(), setnu(), setz()
+	complex rowvector lnU()
+}
+
+void clsUAbadSesma::new() {
+  // 4^i/i*|B_2i|, B Bernoulli numbers; first element is for i=1
+  B = 1.5555555555555X-001\1.1111111111111X-002\1.0410410410410X-001\1.1111111111111X+001\1.f07c1f07c1f08X+003\1.5995995995995X+007\1.5555555555556X+00b\1.c5e5e5e5e5e5eX+00f\1.86e7f9b9fe6e8X+014\1.a74ca514ca515X+019\1.1975cc0ed7304X+01f\1.c2f0566566567X+024\1.ac572aaaaaaabX+02a\1.dc0b1a5cfbe17X+030\1.31fad7cbf3c00X+037\1.c280563b8bcbdX+03d\1.7892edfdf5556X+044\1.62b8b44651d09X+04b\1.76024c215d22bX+052\1.b6c0dfed2955bX+059\1.1cca39b77b027X+061\1.97212d8cc1040X+068\1.3f0cb06b17e29X+070\1.1101d96823ee1X+078\1.fc474bdd53c20X+07f\1.007db56db95dfX+088\1.17c6dd28a9378X+090\1.48df88a383ad8X+098\1.9f7b3fa37f314X+0a0\1.195c16c40d563X+0a9\1.97922eafb5d17X+0b1\1.3b0a43def5904X+0ba\1.035a171273533X+0c3\1.c5e89f1fd242eX+0cb\1.a575dd47b788aX+0d4\1.9e84a01ae153bX+0dd\1.af26959307253X+0e6\1.d9890bc68eeddX+0ef\1.1231831c6ccbdX+0f9\1.4e5b1c79769adX+102\1.acc2917790916X+10b\1.20bd5e935fc86X+115\1.97f9f572293ebX+11e\1.2e083516087a9X+128\1.d41e650690e84X+131\1.7b59a0f58ffb8X+13b\1.412709736939fX+145\1.1bc48bbc5cc50X+14f\1.0575ec3ab2234X+159\1.f5fe45963cac3X+162\1.f5abf07320dbaX+16c\1.04c0734d5322dX+177\1.19bdb7ca080b5X+181\1.3c2f25da2f119X+18b\1.704a6714a172bX+195\1.bcf2002532ee2X+19f\1.169855a5defafX+1aa\1.6963e57ed41dfX+1b4\1.e54fbbb872117X+1be\1.5125bc119ad89X+1c9\1.e4616e3d8d09aX+1d3\1.679a15f64d5a9X+1de\1.13c15fcb28309X+1e9\1.b49d69397c7aaX+1f3\1.64abed86e0175X+1fe\1.2c8197ead1271X+209\1.05015c2200ecfX+214\1.d32f2c47ba10cX+21e\1.aea4c26df15f6X+229\1.98adca0fa6ca5X+234\1.8f1dcfb3cd633X+23f\1.90f42af6fe074X+24a\1.9e2f8a971c6f1X+255\1.b7c7b687b5bb6X+260\1.dfcb00aa4c2cfX+26b\1.0cd20cf8a2e4dX+277\1.354a937fa88e0X+282\1.6d400c144ce9eX+28d\1.ba92b59047eb7X+298\1.13079715a5f66X+2a4\1.5e8194cdc3f82X+2af\1.c9e5d8fd49582X+2ba\1.32811f8ce591dX+2c6\1.a45eae570d41eX+2d1\1.273c29596492dX+2dd\1.a89a664a7f630X+2e8\1.3888d893937f4X+2f4\1.d6d21fe9b4fb0X+2ff\1.6acfec47defa2X+30b\1.1df41024fe6a3X+317\1.cce916a2f02f1X+322\1.7bbbe1e92e94bX+32e\1.3fbfc0ec34e1dX+33a\1.131bca925b254X+346\1.e39bd06647752X+351\1.b221ac47c86e0X+35d\1.8df13eed18d1cX+369\1.746394821e395X+375\1.63ae13ac3b025X+381\1.5aabe04f8c67bX+38d
+
+  f = J($UAbadSesma_N,1,1)
+  g = J($UAbadSesma_N,1,C(1))
+  dfdnu = J($UAbadSesma_N,1,0)
+  dgdlnz = J($UAbadSesma_N,1,C(0))
+}
+
+void clsUAbadSesma::setalpha(complex rowvector _alpha) {
+	if (palpha==NULL)
+  	palpha = &_alpha
+  else if (cols(*palpha) != cols(_alpha) | (*palpha)[1] != _alpha[1])
+  	palpha = &_alpha
+}
+
+void clsUAbadSesma::setnu(real scalar _nu) {
+  if (nu != _nu) {
+    nu = _nu
+    nuDirty = 1
+  }
+}
+
+void clsUAbadSesma::setz(real scalar _z, real scalar _lnz) {
+  if (lnz != _lnz) {
+    lnz = _lnz
+    z   = _z
+  }
+}
+
+complex rowvector clsUAbadSesma::lnU(real scalar mini, | real scalar todo, complex rowvector dlnUdalpha, complex rowvector dlnUdnu, complex rowvector dlnUdlnz) {
+  real colvector j; complex scalar Karg, lnKarg, lnnegiz, _combfg; real scalar s, _cross, _comb, onemhalfbeta; complex matrix terms, dtermsdalpha, dtermsdnu, dtermsdlnz; complex rowvector dlnKdnu, dlnKdlnarg, retval; complex colvector _g, dlnKargdalpha, dlnKargdnu, _combf
+  pragma unset dlnKdnu; pragma unset dlnKdlnarg
+
+  if (nuDirty) {
+  	beta = 1 + nu
+    onemhalfbeta = 1 - .5*beta
+    for (s=1;s<$UAbadSesma_N;s++) {
+      j = 0 :: s-1
+      f[s+1] = onemhalfbeta * (_cross = quadcross(_comb = comb(2*s-1, 2*j) :* B[s:-j], f[|.\s|]))
+      if (todo==1)
+        dfdnu[s+1] = onemhalfbeta * quadcross(_comb, dfdnu[|.\s|]) -.5 * _cross
+    }
+    nuDirty = 0
+  }
+
+  lnnegiz = -1.921fb54442d18X+000i /*log -i*/ + lnz
+
+  Karg = sqrt((4 * (*palpha)[|mini+1\.|] :- 2 * beta) * z); lnKarg = ln(Karg)
+  (terms = J($UAbadSesma_N, cols(Karg), C(.)))[1,] = S.lnK(beta-1, Karg, lnKarg, todo, dlnKdnu, dlnKdlnarg)
+  if (todo == 1) {
+  	dlnKargdnu = -.5 * (dlnKargdalpha = 1 :/ (2 * (*palpha)[|mini+1\.|] :- beta))
+  	// dlnKargdnlz = .5
+    (dtermsdalpha = terms)[1,] =           dlnKdlnarg :* dlnKargdalpha
+    (dtermsdnu    = terms)[1,] = dlnKdnu + dlnKdlnarg :* dlnKargdnu
+    (dtermsdlnz   = terms)[1,] =           dlnKdlnarg  * .5
+  }
+
+  for (s=1;s<$UAbadSesma_N;s++) {
+    j = 0 :: floor((s - 1) * .5)
+    g[s+1] = -.25i * (z * ((_comb = comb(s-1, 2*j) :* B[j:+1]) ' g[s:-2*j]))
+    if (todo==1)
+      dgdlnz[s+1] = g[s+1] - .25i * (z * (_comb ' dgdlnz[s:-2*j]))
+    j = 0 :: floor(s * .5)
+    terms[s+1,] = (s * lnnegiz - lngamma(s+1) + ln(_combfg = (_combf = (_comb=comb(s, 2*j)) :* f[j:+1]) ' (_g = g[(s+1):-2*j]))) :+ S.lnK(beta-1+s, Karg, lnKarg, todo, dlnKdnu, dlnKdlnarg)  // update lnK using recurrence relation
+    if (todo==1) {
+    	dtermsdalpha[s+1,] =                                                                             dlnKdlnarg :* dlnKargdalpha
+    	dtermsdnu   [s+1,] = ((    _comb :* dfdnu[j:+1]) ' _g                ) :/ _combfg  :+ (dlnKdnu + dlnKdlnarg :* dlnKargdnu   )
+      dtermsdlnz  [s+1,] = (s + (_combf                ' dgdlnz[(s+1):-2*j]) :/ _combfg) :+            dlnKdlnarg :* .5
+    }
+  }
+
+  retval = asdfLogSumExp(terms)
+  if (todo==1) {
+    terms = terms :- retval
+    dlnUdalpha =                                                    quadcolsum(exp(terms + ln(dtermsdalpha)))
+    dlnUdnu    = (1.62e42fefa39efX-001 /*ln(2)*/ + digamma(-nu)) :+ quadcolsum(exp(terms + ln(dtermsdnu   )))
+    dlnUdlnz   = z*.5                                            :+ quadcolsum(exp(terms + ln(dtermsdlnz  )))
+  }
+  return((beta * 1.62e42fefa39efX-001 /*ln(2)*/ + z*.5 - lngamma(-nu)) :+ retval)
+}
+
+
+// Class for computing sticky Feller PDF
+
+class clsStickyFeller {
+	real colvector lnBesselKPower_0toM, lnBesselKPower_2Mto0, ot, ox, oy, zerofill, zeroind, missingfill, missingfillg, lnx, lny, Nuniq, _mu
+	real matrix uniqdata
+	pointer (real colvector) scalar px, py, pt
+	real scalar N, Nt
+	complex rowvector tlambdalnu, u2
+	complex colvector phi, dphidalpha, dphidnu, dphidlnz
+	complex matrix lambda
+  class clsUPower scalar SUPower  // instantiate these objectsion when clsStickyFeller is instantiated--just once per estimation
+  class clsUAbadSesma scalar SUAsymParam
+  class clsUAsymArg scalar SUAsymArg
+	class clsBesselKAsym scalar SBesselKAsym
+  class clsdigamma scalar Sdigamma
+  class asdfEstfeller scalar SEstFeller  // (should be able to access non-sticky Feller functionality more elegantly with class reorganization)
+
+	real colvector lnStickyFeller()
+	complex rowvector lnBesselKPower()  // for consistency, should be given its own class
+	void new(), setData()
+}
+
+void clsStickyFeller::new() {
+  complex rowvector u
+
+  SEstFeller.setFixedParam("reflect", 0)  // prep for absorbing term
+
+  lnBesselKPower_0toM = 0::$BesselKPower_M  // stuff for power series
+  lnBesselKPower_2Mto0 = lnBesselKPower_0toM * 2
+	
+	u = C(1, (.5 .. $StickyFeller_N-.5) * $StickyFeller_h)  // really (1 + ui)
+	u2 = u :* u
+	tlambdalnu = ln(u) + $StickyFeller_mu * u2 :- 1.16c0cdab51479X+001 // + ln 2*2*h/2pi for Mellin integral; tack on here for efficiency. strofreal() always includes +-
+}
+
+void clsStickyFeller::setData(real colvector t, real colvector x, real colvector y) {
+	real colvector tID, txyID, o, invo; real matrix data, tinfo, txyinfo
+	pragma unset tID; pragma unset txyID
+
+	SEstFeller.setData(t, x, y)
+
+  px = &x; py = &y; pt = &t
+	
+	zerofill = J(length(zeroind = selectindex(y:==0)), 1, 0)
+	missingfill  = J(length(zeroind), 1, .)
+	missingfillg = J(length(zeroind), 3, 0)
+	lnx = ln(x); lny = ln(y)
+
+	N = rows(t)
+	data = t,x,lnx \ t,y,lny
+	_collate(data, o = order(data, (1,2)))  // sort observations by t, x/y
+	tinfo   = asdfpanelsetup(data,  1   ,   tID)
+	txyinfo = asdfpanelsetup(data, (1,2), txyID)
+	uniqdata = data[txyinfo[,1],]  // unique t-x/y combinations
+	Nuniq = rows(txyinfo)
+	Nt = rows(tinfo)  // unique values of t
+	invo = invorder(o)
+	ot =   tID[invo[|.  \N|]]  // map from original observations to unique t's
+	ox = txyID[invo[|.  \N|]]  // map from original observations to unique t-x's
+	oy = txyID[invo[|N+1\.|]]  // map from original observations to unique t-y's
+	dphidalpha = dphidnu = dphidlnz = phi = J(Nuniq, $StickyFeller_N, C(0))
+
+	_mu = $StickyFeller_mu :/ data[tinfo[,1],1]
+	lambda = _mu * u2   // "mu" as in Garrappa (2015), p. 1364, not stickiness parameter
+}
+
+
+// compute log transition density f(t; x, y) = p(t; x, y) * m(dx) for sticky Feller by applying Weideman & Trefethen (2007), Weideman (2010), parabolic contour method to sticky term of Green function
+// assumes b < 0 and t,x,y have same height
+real colvector clsStickyFeller::lnStickyFeller(real scalar lna, real scalar b, real scalar nu, real scalar lnmu, real scalar todo, | real matrix g) {
+  real colvector retval, lnp0, lnm, z, lnz, dlnmdlna, dlnmdb, dlnmdnu, dlnmdlnmu
+	real scalar a, hi, ba, i, j, lngammanegnu, beta, p, absb, anypower, anyasymparam, anyasymarg, oldt, lnba, absbdiv_mu, c, floorp
+  complex matrix alpha, alphamnu, lngammaalphamnu, lnK, lnC, C, dlnCdb, dlnCdnu, dlnCdalpha, K, KC, dlnKdlna, dlnKdb, dlnKdnu, dlnKdlnmu, terms, dphidb
+	complex rowvector lnUAsymParam, lnUSmallalpha, alphaj, lnalphaj, lambdaj, lnCj, dlnCdalphaj, dlnCdnuj, dlnUdalphaSmall, dlnUdnuSmall, dlnUdlnzSmall, dlnUdalphaBig, dlnUdnuBig, dlnUdlnzBig
+  complex colvector dlna, db, dnu, dlnmu, lnsticky
+	pragma unset dlnUdalphaSmall; pragma unset dlnUdnuSmall; pragma unset dlnUdlnzSmall; pragma unset dlnUdalphaBig; pragma unset dlnUdnuBig; pragma unset dlnUdlnzBig; pragma unset lnp0
+  pragma unset oldt  // will exploit that initial value is missing
+
+	if (nu < -1 | nu > 0)
+		return (.)
+
+  SEstFeller.lnPDF(lna\b\nu, lnp0, todo, g)
+  if (nu == 0 | nu == -1) {
+    if (todo)
+      g = g, J(rows(g),1,0)  // add 0's for derivatives w.r.t. lnmu
+		return (lnp0)
+  }    
+ 
+	if (rows(zerofill)) {
+    lnp0[zeroind] = missingfill  // where y=0, "absorbing term" drops out
+    if (todo)
+      g[zeroind,] = missingfillg
+  }
+
+	beta = 1 + nu
+	lngammanegnu = lngamma(-nu)
+	ba = (absb = abs(b)) / (a = exp(lna))
+	_editmissing(lnm = nu * lny - ba * (b < 0? *py : *px) :- lna, -lnmu)  // log speed measure; takes special value of 1/mu when y = 0; b>0 modification is a trick to multiply by exp(-b/a*(x+y))
+
+  if (todo) {
+    dlnmdlna  = (lny :< .) :* (ba * (b < 0? *py : *px) :- 1)
+    dlnmdb    = (lny :< .) :* (b < 0? *py / a : *px / (-a))
+    dlnmdnu   = editmissing(lny, 0)
+    dlnmdlnmu = -!*py  // -1 if y is 0; 0 otherwise
+  }
+
+	if (absb > 1e-10) {  // non-squared-Bessel/b<>0
+		SUPower.setnu    (nu)
+		SUAsymParam.setnu(nu)
+		SUAsymArg.setnu  (nu)
+		alpha = lambda / -b; if (b > 0) alpha = beta :- alpha
+
+		lngammaalphamnu = lngamma(alphamnu = alpha :- nu)
+		C = exp(lnC = (lngamma(beta) - ln(-nu) - lngammanegnu) :+ (lngammaalphamnu - lngamma(alpha)))
+		lnK = -ln(u2 / exp(lnmu) :- (nu :/ _mu) :* exp(lnC :- nu * (lnba = ln(absb)-lna)))  // ln K*_mu in G = K * phi(x) * phi(y); mu is stickiness parameter; _mu is mu as in Garrappa (2015), p. 1364, part of Jacobian of parabolic path function
+    if (todo) {
+      dlnCdb   = lambda / (-b * absb) :* (dlnCdalpha = Sdigamma.psi(alphamnu) - Sdigamma.psi(alpha))
+      dlnCdnu  = (digamma(beta) + digamma(1 - nu)) :- Sdigamma.psi(alphamnu)
+      KC = C :* (K = exp(lnK) / _mu) * (ba^-nu * nu)
+      dlnKdlna  = KC * nu
+      dlnKdb    = KC :* (dlnCdb  :- nu / b)
+      dlnKdnu   = KC :* (dlnCdnu :+ (1 / nu - ln(ba)))
+      dlnKdlnmu = K :* lambda / exp(lnmu)
+    }
+
+		j = Nt + 1
+		for (i=Nuniq; i; i--) {
+			if (uniqdata[i,1] != oldt) {
+				oldt = uniqdata[i,1]
+				alphaj = alpha[--j,]
+				absbdiv_mu = absb / _mu[j]
+				dlnCdalphaj = dlnCdnuj = lnCj = C(.)
+				SUPower.setalpha(alphaj)
+				SUAsymParam.setalpha(alphaj)
+				SUAsymArg.setalpha(alphaj)
+			}
+
+			z = ba * uniqdata[i,2]  // z = b/a *x or b/a * y
+      if (z) {  // if z==0, ln phi=ln 1, as initialized; ditto for derivatives
+        lnz = lnba :+ uniqdata[i,3]
+
+        // indexes in lambda after which switch from power or asymptotic-argument to asymptotic-parameter; min value is 0, based on benchmarking against mpmath's hyperu()
+        hi = z > 15.460074  // for low z, use large-argument asymptotic rather than standard power series representation?
+        p = editmissing(.5 + sqrt( (hi? (z * `=exp(-1.446009 /  1.102413)') ^  1.102413 : 
+                                        (z * `=exp( 3.582745 / -.7823305)') ^ -.7823305   ) * absbdiv_mu - 1) / $StickyFeller_h, 0)  // index of last point on parabola handled with power series representation
+        floorp = floor(p)
+        anypower = hi==0 & p>0; anyasymarg = hi & floorp; anyasymparam = p < $StickyFeller_N
+        if (anypower) {
+          SUPower.setz(z, lnz)
+          if (lnCj) {
+          	lnCj=lnC[j,]
+            if (todo) {
+            	dlnCdalphaj = dlnCdalpha[j,]
+              dlnCdnuj    = dlnCdnu   [j,]
+            }
+          }
+          lnUSmallalpha = SUPower.lnU(floorp+1, lnCj, todo, dlnCdalphaj, dlnCdnuj, dlnUdalphaSmall, dlnUdnuSmall, dlnUdlnzSmall)
+        } else if (anyasymarg) {
+          SUAsymArg.setz(z, lnz, todo, dlnUdalphaSmall, dlnUdnuSmall, dlnUdlnzSmall)
+          lnUSmallalpha = SUAsymArg.lnU(floorp+1)
+        }
+
+        if (anyasymparam) {
+          SUAsymParam.setz(z, lnz)
+          lnUAsymParam = SUAsymParam.lnU(floorp, todo, dlnUdalphaBig, dlnUdnuBig, dlnUdlnzBig)
+        }
+        if (p > 0 & anyasymparam) {  // if using both power series/large-argument and large-parameter, smooth cross-over with a weighted average to reduce discontinuities w.r.t parameters
+          c = p - floorp
+          lnUAsymParam[1] = (1 - c) * lnUAsymParam[1] + c * lnUSmallalpha[floorp+1]
+          if (todo) {
+            dlnUdalphaBig[1] = (1 - c) * dlnUdalphaBig[1] + c * dlnUdalphaSmall[floorp+1]
+            dlnUdnuBig   [1] = (1 - c) * dlnUdnuBig   [1] + c * dlnUdnuSmall   [floorp+1]
+            dlnUdlnzBig  [1] = (1 - c) * dlnUdlnzBig  [1] + c * dlnUdlnzSmall  [floorp+1]
+          }
+        }
+
+        phi[i,] = floorp? (p >= $StickyFeller_N? lnUSmallalpha : lnUSmallalpha[|.\floorp|], lnUAsymParam) : lnUAsymParam
+        if (todo) {
+          dphidalpha[i,] = floorp? (p >= $StickyFeller_N? dlnUdalphaSmall : dlnUdalphaSmall[|.\floorp|], dlnUdalphaBig) : dlnUdalphaBig
+          dphidnu   [i,] = floorp? (p >= $StickyFeller_N? dlnUdnuSmall    : dlnUdnuSmall   [|.\floorp|], dlnUdnuBig   ) : dlnUdnuBig
+          dphidlnz  [i,] = floorp? (p >= $StickyFeller_N? dlnUdlnzSmall   : dlnUdlnzSmall  [|.\floorp|], dlnUdlnzBig  ) : dlnUdlnzBig
+        }
+      }
+		}
+	} else {  // squared Bessel/b=0 case. Would need a different approach if b could vary by observation
+		lnC = (lngamma(beta) - ln(-nu) - lngammanegnu) :- nu * (ln(lambda) - lna)
+		lnK = -ln(u2 / exp(lnmu) :- (nu :/ _mu) :* exp(lnC))   // K in G = K * phi(x) * phi(y); mu is stickiness parameter; _mu is mu as in Garrappa (2015), p. 1364 (here, part of Jacobian of parabolic path function)
+
+		j = Nt + 1
+		for (i=Nuniq; i; i--) {
+			if (uniqdata[i,1] != oldt) {
+				oldt = uniqdata[i,1]
+				lambdaj = lambda[--j,]
+			}
+
+			if (z = uniqdata[i,2]) {
+        alphaj = sqrt(lambdaj :* ((4/a) * z)); lnalphaj = ln(alphaj)
+
+        p = editmissing(round( sqrt((20.25 * a / _mu[j]) / z :- 1) / $StickyFeller_h), 0)  // indexes of parabola points where BesselK argument passes 9, cut-off between power series & asymptotic; 20.25 = 9^2/4 
+
+        phi[i,] = (p <  1 ?                                                                     SBesselKAsym.lnK(nu, alphaj,          lnalphaj         )  : 
+                                (p >= $StickyFeller_N?     lnBesselKPower(nu, lnalphaj)        :
+                                                           lnBesselKPower(nu, lnalphaj[|.\p|]), SBesselKAsym.lnK(nu, alphaj[|p+1\.|], lnalphaj[|p+1\.|]))) :- nu * 1.62e42fefa39efX+000 /*ln 4*/
+      }
+		}
+	}
+
+  terms = (tlambdalnu :+ lnK)[ot,] + phi[ox,] + phi[oy,]
+  lnsticky = asdfLogRowSumExpC(terms)
+
+  if (todo) {
+    terms = terms :- lnsticky
+    
+    dphidb   = dphidalpha :* lambda /(-b * absb) + dphidlnz / b  // from partial to total derivatives 
+    dphidnu  = (b < 0? dphidnu : dphidalpha + dphidnu)
+
+    dlna  = quadrowsum(exp(terms + ln(dlnKdlna [ot,] - dphidlnz [ox,] - dphidlnz[oy,]))) + dlnmdlna
+    db    = quadrowsum(exp(terms + ln(dlnKdb   [ot,] + dphidb   [ox,] + dphidb  [oy,]))) + dlnmdb   
+    dnu   = quadrowsum(exp(terms + ln(dlnKdnu  [ot,] + dphidnu  [ox,] + dphidnu [oy,]))) + dlnmdnu
+    dlnmu = quadrowsum(exp(terms + ln(dlnKdlnmu[ot,]                                 ))) + dlnmdlnmu
+
+    lnsticky = lnm + lnsticky  // add log speed measure: p = m * f
+    retval = Re(asdfLogRowSumExpC((lnp0, lnsticky)))  // Add asborbing & sticky terms. In theory can take Re() sooner, but in extreme cases imprecision makes Bromwich sum <0, throwing us into C and generating discontinuity
+    g  = Re(editmissing((exp(lnp0 :+ ln(C(g)) :- retval),J(rows(g),1,0)),0) + exp(lnsticky - retval :+ ln((dlna, db, dnu, dlnmu))))
+  } else
+    retval = Re(asdfLogRowSumExpC((lnp0, lnsticky + lnm)))  // add log speed measure: p = m * f, then add absorbing term
+  return(retval)
+}
+
+
+// Compute log (K_nu(z) / z^nu) with power series formula and complex argument z
+// series length from Zhang and Jin's CIKVB @ people.sc.fsu.edu/~jburkardt/f_src/special_functions/special_functions.f90
+complex rowvector clsStickyFeller::lnBesselKPower(real scalar nu, complex rowvector lnz) {
+  real colvector InuDenom, InegnuDenom; complex matrix twomlnhalfz; complex rowvector lnhalfz
+
+  (InuDenom    = ln(( nu::$BesselKPower_M.5+nu) :* lnBesselKPower_0toM))[1] = lngamma(1+nu)
+  (InegnuDenom = ln((-nu::$BesselKPower_M.5-nu) :* lnBesselKPower_0toM))[1] = lngamma(1-nu)
+
+	lnhalfz = lnz :- 1.62e42fefa39efX-001 /*ln .5*/
+	twomlnhalfz = lnBesselKPower_2Mto0 * lnhalfz
+	return ((1.ce6bb25aa1315X-002 /*ln pi/2*/ - nu * 1.62e42fefa39efX-001 /*ln 2*/ - ln(C(sin(nu * 1.921fb54442d18X+001 /*pi*/ )))) :+ 
+                asdfLogSumExp(asdfLogSumExp((twomlnhalfz :+ nu * (1.62e42fefa39efX-000 /*ln 4*/ :- 2*lnz)) :- quadrunningsum(InegnuDenom)) \ 
+	                            asdfLogSumExp( twomlnhalfz                                                   :- quadrunningsum(   InuDenom)) :+ 1.921fb54442d18X+001i /*pi i*/))
+}
+
+/*S =clsStickyFeller()
+S.setData(1\1,1\0,1\0)
+lna=0;b=-.1;nu=-.25;lnmu=.01
+(void) S.lnStickyFeller(lna,b,nu,lnmu,1,g=.) ; g
+h=.0001;(S.lnStickyFeller(lna+h,b,nu,lnmu,0) - S.lnStickyFeller(lna,b,nu,lnmu,0))/h
+h=.0001;(S.lnStickyFeller(lna,b+h,nu,lnmu,0) - S.lnStickyFeller(lna,b,nu,lnmu,0))/h
+h=.0001;(S.lnStickyFeller(lna,b,nu+h,lnmu,0) - S.lnStickyFeller(lna,b,nu,lnmu,0))/h
+h=.0001;(S.lnStickyFeller(lna,b,nu,lnmu+h,0) - S.lnStickyFeller(lna,b,nu,lnmu,0))/h
+end*/
 
 //
 // Class for estimating Bernoulli SDE via s, B, delta, lnsig parameterization
@@ -627,10 +1395,10 @@ class asdfEststickyfeller extends asdfEst {
 	real scalar getlf()
 }
 
-real scalar asdfEststickyfeller::getlf() return(0)  // only an lf0 estimator
+real scalar asdfEststickyfeller::getlf() return(1)  // lf1 estimator
 
 // _Y0, _Y, _tDelta = inital & final values, and time gaps
-void asdfEststickyfeller::setData(real colvector Y0, real colvector Y, real colvector tDelta) {
+void asdfEststickyfeller::setData(real colvector tDelta, real colvector Y0, real colvector Y) {
 	pY0 = &Y0; pY  = &Y; ptDelta = &tDelta
 	S.setData(tDelta, Y0, Y)
 }
@@ -664,7 +1432,7 @@ void asdfEststickyfeller::processParams(transmorphic vector params) {
 void asdfEststickyfeller::lnPDF(transmorphic vector params, real colvector lnf, | real scalar todo, real matrix g, struct smatrix h) {
 	pragma unset todo; pragma unset g; pragma unset h
 	processParams(params)
-	lnf = S.lnStickyFeller(exp(*plna), *plna, *pb, *pnu, exp(*plnmu), *plnmu)
+	lnf = S.lnStickyFeller(*plna, *pb, *pnu, *plnmu, todo, g)
 }
 
 
@@ -722,14 +1490,48 @@ function asdflf2(transmorphic scalar M, real scalar todo, real rowvector b, real
   }
 }
 
-// sum columns of potentially negative numbers stored in logs, avoiding overflow, treating missing as log of 0
-numeric rowvector asdfquadLogSumExp(numeric matrix x) {
-	real rowvector shift
+numeric rowvector asdfLogSumExp(numeric matrix x) {
+	real rowvector shift; real colvector limits, minn, maxx; real matrix t
 	if (rows(x)==0) return(J(1,cols(x),0))
 	if (rows(x)==1) return(x)
-	shift = ln(maxdouble()/rows(x)) :- colmax(eltype(x)=="real"? x : Re(x))
-//	shift = shift - (shift:>0):*shift  // only downshift, to present overflow; shifting can prevent underflow & overflow but can also reduce precision if the shifter is much larger than entries
-	return (ln(quadcolsum(exp(x :+ shift))) - shift)
+	limits = ln(smallestdouble()) + 1 \ ln(maxdouble()) - rows(x) - 1
+	t = limits :- colminmax(Re(x))  // shift just enough to prevent underflow in exp(), but if necessary even less to avoid overflow
+	minn = t[1,]; maxx = t[2,]
+	t = minn :* (minn :> 0) - maxx
+	shift = t :* (t :< 0) + maxx // parallelizes better than rowminmax()
+	return (any(shift)? ln(quadcolsum(exp(x :+ shift))) - shift : ln(quadcolsum(exp(x))))
+}
+
+// sum pairs of numbers stored in logs, avoiding overflow, treating missing as log of 0
+complex colvector asdfLogRowSumExpC(complex matrix x) {
+	real colvector shift; real rowvector limits, minn, maxx; real matrix t
+	limits = ln(smallestdouble()) + 1 , ln(maxdouble()) - rows(x) - 1
+	t = limits :- rowminmax(Re(x))
+	minn = t[,1]; maxx = t[,2]
+	t = minn :* (minn :> 0) - maxx
+	shift = t :* (t :< 0) + maxx
+	return (any(shift)? ln(quadrowsum(exp(x :+ shift))) - shift : ln(quadrowsum(exp(x))))
+}
+
+
+// like panelsetup() but can group on multiple columns, like sort(), and faster. But doesn't take minobs, maxobs arguments.
+// Takes third argument, a matrix in which to store standardized ID variable, starting from 1
+real matrix asdfpanelsetup(real matrix X, real rowvector cols, real colvector ID) {
+	real matrix info; real scalar i, N; real scalar p; real rowvector t, id
+	N = rows(X)
+	info = J(N, 2, N)
+  ID = J(N, 1, 1)
+	info[1,1] = p = 1
+	id = X[1, cols]
+	for (i=2; i<=N; i++) {
+		if ((t = X[i,cols]) != id) {
+			info[  p,2] = i - 1
+			info[++p,1] = i
+			id = t
+		}
+		ID[i] = p
+	}
+	return (info[|.,.\p,.|])
 }
 
 
@@ -776,6 +1578,7 @@ real colvector lnPDFFeller(real colvector _nuv, real colvector lnlambdav, real c
 	mstar = -.5 * *pnuv :+ (sqrt(0.25 :* *pnuv :* *pnuv :+ xl))  // index of max power series term, anchor for expansion in both directions.
 	t = floor(mstar); mstarfrac = mstar - t; mstar = t  // track fractional part of otherwise discrete mstar variable, for smoothing
 	blockSize = ceil(LaplaceEpsilon * sqrt(mstar * .5))  // discretized too--but no smoothing for that yet!
+
 	bigarg = blockSize :> 1e6  // use large-argument asymptotic or ascending power series expansion?
 	power = 1 :- (big = bigarg)  // use asymptotic or ascending power series expansion?
 	anybigord = any(bigord = bigarg :& *pnuv :/ xl :> 1e6)  // use large-order approximation?
@@ -832,7 +1635,15 @@ real colvector lnPDFFeller(real colvector _nuv, real colvector lnlambdav, real c
 	}
 
 	if (lnxv != .) {
-		lnx = lnxv[1]; lnlambda = lnlambdav[1]; lnxl= lnxlv[1]; x = xv[1]; lambda = lambdav[1]; nu = (*pnuv)[1]; _c = max((0, c[1])); lnJ = lnJv[1]; lnK = lnKv[1]
+		lnx = lnxv[1]
+    lnlambda = lnlambdav[1]
+    lnxl= lnxlv[1]
+    x = xv[1]
+    lambda = lambdav[1]
+    nu = (*pnuv)[1]
+    _c = max((0, c[1]))
+    lnJ = lnJv[1]
+    lnK = lnKv[1]
 		lnpowersum = J(N, 1, 0)
 
 		for (i=N;i;i--) {  // main loop over observations
@@ -858,7 +1669,7 @@ real colvector lnPDFFeller(real colvector _nuv, real colvector lnlambdav, real c
 			if (lnx == .) continue  // (deal with x = 0/lnx = . after loop)
 
 			xlambda = x * lambda
-			if (xlambda==. | nu==. | (!reflect & nu<0)) {
+			if (xlambda==. | nu==. | (reflect==0 & nu<0)) {
 				lnpowersum[i] = .
 				continue
 			}
@@ -954,17 +1765,17 @@ real colvector lnPDFFeller(real colvector _nuv, real colvector lnlambdav, real c
 						m = _c-1 :: 1; mnu = _c-1+nu :: 1+nu-.5
 						logRatios = (lnm=ln(m)) + ln(mnu)
 						cumLogRatios = quadrunningsum(logRatios, 1) - (1::_c-1) * lnxl
-						termSums = lnBaseTermc + asdfquadLogSumExp(cumLogRatios) \ termSums
+						termSums = lnBaseTermc + asdfLogSumExp(cumLogRatios) \ termSums
 						if (todo) {
 							_dnu  = cumLogRatios +      ln(C(t=digamma(mnu)))
 							_dlnx = cumLogRatios + (lnm = _c==2? . : lnm[|2\.|] \ .)
-							dTermSums = lnBaseTermc :+ (1.921fb54442d18X+001i /*pi i*/ + asdfquadLogSumExp(_dnu )  ,  // logs of nu derivatives
-													                                                 asdfquadLogSumExp(_dlnx)) \  // logs of x/lambda derivatives
+							dTermSums = lnBaseTermc :+ (1.921fb54442d18X+001i /*pi i*/ + asdfLogSumExp(_dnu )  ,  // logs of nu derivatives
+													                                                 asdfLogSumExp(_dlnx)) \  // logs of x/lambda derivatives
 													dTermSums
 							if (todo > 1)
-								ddTermSums = lnBaseTermc :+ (                                 asdfquadLogSumExp(cumLogRatios + ln(C(t:*t - trigamma(mnu))))  ,
-								                             1.921fb54442d18X+001i /*pi i*/ + asdfquadLogSumExp(_dnu         + lnm                        )  ,
-								                                                              asdfquadLogSumExp(_dlnx        + lnm                        )) \
+								ddTermSums = lnBaseTermc :+ (                                 asdfLogSumExp(cumLogRatios + ln(C(t:*t - trigamma(mnu))))  ,
+								                             1.921fb54442d18X+001i /*pi i*/ + asdfLogSumExp(_dnu         + lnm                        )  ,
+								                                                              asdfLogSumExp(_dlnx        + lnm                        )) \
                              ddTermSums
 						}
 					}
@@ -1010,18 +1821,18 @@ real colvector lnPDFFeller(real colvector _nuv, real colvector lnlambdav, real c
 						pSlnxl = &(M==_blockSize? Slnxl : Slnxl[|.\M|])
 						logRatios = (lnm=ln(m)) + ln(mnu)  // log of ratio of successive denominators in power series
 						cumLogRatios = quadrunningsum(logRatios) - *pSlnxl
-						termSums = (update = lnBaseTerm + asdfquadLogSumExp(cumLogRatios)) \ termSums
+						termSums = (update = lnBaseTerm + asdfLogSumExp(cumLogRatios)) \ termSums
 
 						if (todo) {
 							_dnu  = cumLogRatios + ln(t=digamma(mnu))
 							_dlnx = cumLogRatios + (lnm = M==1? ln(m-1) : lnm[|2\.|]\ln(m[M]-1))
-							dTermSums = lnBaseTerm + 1.921fb54442d18X+001i /*pi i*/ + asdfquadLogSumExp(_dnu ) ,  // logs of nu derivatives of sum of terms
-													lnBaseTerm                                  + asdfquadLogSumExp(_dlnx) \  // logs of x/lambda derivatives
+							dTermSums = lnBaseTerm + 1.921fb54442d18X+001i /*pi i*/ + asdfLogSumExp(_dnu ) ,  // logs of nu derivatives of sum of terms
+													lnBaseTerm                                  + asdfLogSumExp(_dlnx) \  // logs of x/lambda derivatives
                           dTermSums
 							if (todo > 1)
-								ddTermSums = lnBaseTerm                                 + asdfquadLogSumExp(cumLogRatios + ln(t:*t - trigamma(mnu))) ,
-														 lnBaseTerm + 1.921fb54442d18X+001i /*pi i*/+ asdfquadLogSumExp(_dnu         + lnm                     ) ,
-														 lnBaseTerm                                 + asdfquadLogSumExp(_dlnx        + lnm                     ) \
+								ddTermSums = lnBaseTerm                                 + asdfLogSumExp(cumLogRatios + ln(t:*t - trigamma(mnu))) ,
+														 lnBaseTerm + 1.921fb54442d18X+001i /*pi i*/+ asdfLogSumExp(_dnu         + lnm                     ) ,
+														 lnBaseTerm                                 + asdfLogSumExp(_dlnx        + lnm                     ) \
                              ddTermSums
 						}
             
@@ -1049,7 +1860,7 @@ real colvector lnPDFFeller(real colvector _nuv, real colvector lnlambdav, real c
 					pSlnxl = &(M==_blockSize? Slnxl : Slnxl[|.\M|])
 					logRatios = (lnm=ln(m)) + ln(mnu)  // log of ratio of successive denominators in power series
 					cumLogRatios = *pSlnxl - quadrunningsum(logRatios)
-					termSums = (update = lnBaseTerm + asdfquadLogSumExp(cumLogRatios)) \ termSums
+					termSums = (update = lnBaseTerm + asdfLogSumExp(cumLogRatios)) \ termSums
 					if (todo) {
 						if (m[M]>=epsilon(nu)) {
               mnu = m[1]+nu+1 :: m[M]+nu+1.5
@@ -1057,13 +1868,13 @@ real colvector lnPDFFeller(real colvector _nuv, real colvector lnlambdav, real c
             }
 						_dnu = cumLogRatios + ln(t=digamma(mnu))
 						_dlnx   = cumLogRatios + lnm
-						dTermSums = lnBaseTerm + 1.921fb54442d18X+001i /*pi i*/ + asdfquadLogSumExp(_dnu ) ,  // logs of nu derivatives
-												lnBaseTerm                                  + asdfquadLogSumExp(_dlnx) \  // logs of x/lambda derivatives
+						dTermSums = lnBaseTerm + 1.921fb54442d18X+001i /*pi i*/ + asdfLogSumExp(_dnu ) ,  // logs of nu derivatives
+												lnBaseTerm                                  + asdfLogSumExp(_dlnx) \  // logs of x/lambda derivatives
                         dTermSums
 							if (todo > 1)
-								ddTermSums = lnBaseTerm +                                  asdfquadLogSumExp(cumLogRatios + ln(t:*t - trigamma(mnu))) ,
-														 lnBaseTerm + 1.921fb54442d18X+001i /*pi i*/ + asdfquadLogSumExp(_dnu         + lnm                      ) ,
-														 lnBaseTerm +                                  asdfquadLogSumExp(_dlnx        + lnm                      ) \
+								ddTermSums = lnBaseTerm +                                  asdfLogSumExp(cumLogRatios + ln(t:*t - trigamma(mnu))) ,
+														 lnBaseTerm + 1.921fb54442d18X+001i /*pi i*/ + asdfLogSumExp(_dnu         + lnm                      ) ,
+														 lnBaseTerm +                                  asdfLogSumExp(_dlnx        + lnm                      ) \
                              ddTermSums
 					}
 
@@ -1078,14 +1889,14 @@ real colvector lnPDFFeller(real colvector _nuv, real colvector lnlambdav, real c
 				} while (1)
 			}  // end ascending power series
 
-			lnpowersum[i] = eltype(termSums)=="complex"? Re(asdfquadLogSumExp(termSums)) : asdfquadLogSumExp(termSums)
+			lnpowersum[i] = eltype(termSums)=="complex"? Re(asdfLogSumExp(termSums)) : asdfLogSumExp(termSums)
       t = bigarg[i]? 0 : lnpowersum[i]
 			if (todo) {
-				tc = Re(exp(asdfquadLogSumExp(dTermSums) :- t))  // log(deriv of log sum) = log(deriv of sum) - log sum
+				tc = Re(exp(asdfLogSumExp(dTermSums) :- t))  // log(deriv of log sum) = log(deriv of sum) - log sum
 				dnu [i] = _dnui  = tc[1]
 				dlnx[i] = _dlnxi = tc[2]
 				if (todo > 1) {
-					tc = Re(exp(asdfquadLogSumExp(ddTermSums) :- t))
+					tc = Re(exp(asdfLogSumExp(ddTermSums) :- t))
 					d2nu2  [i] = tc[1] - _dnui  * _dnui
 					d2nulnx[i] = tc[2] - _dnui  * _dlnxi
 					d2lnx2 [i] = tc[3] - _dlnxi * _dlnxi
@@ -1094,7 +1905,7 @@ real colvector lnPDFFeller(real colvector _nuv, real colvector lnlambdav, real c
 		}
 
 		if (todo) {
-			dnu       = *pdlnKnu       :+/*dlnJdnu=0    :+*/ dnu  ; if (!reflect) dnu = -dnu  // adjust for initial negating of nu 
+			dnu       = *pdlnKnu       :+/*dlnJdnu=0    :+*/ dnu  ; if (reflect==0) dnu = -dnu  // adjust for initial negating of nu 
 			dlnlambda = *pdlnKlnlambda :+ (dlnJlnlambda :+   dlnx)  // add dlnJ first for precision (hoping)
 			dlnx      = *pdlnKlnx      :+ (dlnJlnx      :+   dlnx)  // derivatives of sum are same w.r.t lnlambda and lnx
 			if (todo > 1) {
@@ -1114,8 +1925,8 @@ real colvector lnPDFFeller(real colvector _nuv, real colvector lnlambdav, real c
 	lnJv = lnJv :* diffuse; lnKv = lnKv :* diffuse
 
 	zeros = lnxv:==.
-	masspoints = zeros :& _nuv :< 0 :& (!reflect :| round(_nuv):==(_nuv))
-	zeros = zeros :& masspoints:==0
+	masspoints = zeros :& _nuv :< 0 :& ((reflect==0) :| round(_nuv):==(_nuv))
+	zeros = zeros :& !masspoints
 	if (zeros==1) {  // if len(zeros)=len(masspoints)=max(len(nu),len(X))==1 then *all* (lambda-varying) obs have x=0
 		zeros = .; masspoints = J(0,1,0)  // as a matrix index, . means all rows
 	} else {
@@ -1164,7 +1975,7 @@ real colvector lnPDFFeller(real colvector _nuv, real colvector lnlambdav, real c
 }
 
 // causes large-argument series to instantly diverge, but seems to require impractically many terms for power series approach, and yet order is small relative to  argument, so seemingly large-order approx is bad too:
-lnPDFFeller( 4621016466 ,  27.26823829  , 27.27523152)
+//lnPDFFeller( 4621016466 ,  27.26823829  , 27.27523152)
 
 // mimic Stata's nchi2den()
 real colvector mynchi2den(real scalar k, real colvector lambda, real colvector x)  // should match Stata's nchi2den()
@@ -1198,7 +2009,7 @@ real colvector CDFFeller(real colvector nuv, real colvector lnlambdav, real colv
 		retval[i] = quadcolsum(exp((reflect? m      *lnlambda - lngamma(m :+  1    ) + ln(gammap((nu+1) :+ m, x))  :
 		                                     (m:-nu)*lnlambda - lngamma(m :+ (1-nu)) + ln(gammap(    1  :+ m, x))) :- lambda))
 
-		if (nu < 0 & (!reflect | round(nu)==(nu)))  // mass at 0?
+		if (nu < 0 & (reflect==0 | round(nu)==(nu)))  // mass at 0?
 			retval[i] = retval[i] + gammaptail(-nu, lambda)
 	}
 	return(retval)
