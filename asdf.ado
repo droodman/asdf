@@ -133,7 +133,7 @@ program define asdf, eclass
       mata S.setFixedParam("`param'", ``param'')
     }
 
-    ml model lf`lf'debug asdflf2() `cmdline' if `touse' `wgt', `constraints' `technique' nopreserve `robust' `cluster' `vce'
+    ml model lf`lf' asdflf2() `cmdline' if `touse' `wgt', `constraints' `technique' nopreserve `robust' `cluster' `vce'
     mata moptimize_init_userinfo($ML_M, 1, S)
     mata moptimize_init_nmsimplexdeltas($ML_M, 1e-3)  // ? in case tech(nm)
     if "`from'" != "" ml init `from', copy
