@@ -43,7 +43,7 @@ mata
 mata clear
 mata set matastrict on
 mata set mataoptimize on
-mata set matalnum on
+mata set matalnum off
 
 struct smatrix {
 	real matrix M
@@ -931,8 +931,8 @@ complex rowvector clsUAsymArg::lnU(real scalar maxi, real scalar todo, | complex
 
 class clsUAbadSesma {
   real scalar nu, z, lnz, nuDirty, beta
-	real colvector B, f, dfdnu
-  complex colvector g, dgdlnz
+	real colvector B, f, dfdnu, lns
+  complex colvector g, dgdlnz, Bdiv4i
   pointer(complex rowvector) scalar palpha
   class clsBesselKAsym scalar S
 
@@ -943,11 +943,13 @@ class clsUAbadSesma {
 void clsUAbadSesma::new() {
   // 4^i/i*|B_2i|, B Bernoulli numbers; first element is for i=1
   B = 1.5555555555555X-001\1.1111111111111X-002\1.0410410410410X-001\1.1111111111111X+001\1.f07c1f07c1f08X+003\1.5995995995995X+007\1.5555555555556X+00b\1.c5e5e5e5e5e5eX+00f\1.86e7f9b9fe6e8X+014\1.a74ca514ca515X+019\1.1975cc0ed7304X+01f\1.c2f0566566567X+024\1.ac572aaaaaaabX+02a\1.dc0b1a5cfbe17X+030\1.31fad7cbf3c00X+037\1.c280563b8bcbdX+03d\1.7892edfdf5556X+044\1.62b8b44651d09X+04b\1.76024c215d22bX+052\1.b6c0dfed2955bX+059\1.1cca39b77b027X+061\1.97212d8cc1040X+068\1.3f0cb06b17e29X+070\1.1101d96823ee1X+078\1.fc474bdd53c20X+07f\1.007db56db95dfX+088\1.17c6dd28a9378X+090\1.48df88a383ad8X+098\1.9f7b3fa37f314X+0a0\1.195c16c40d563X+0a9\1.97922eafb5d17X+0b1\1.3b0a43def5904X+0ba\1.035a171273533X+0c3\1.c5e89f1fd242eX+0cb\1.a575dd47b788aX+0d4\1.9e84a01ae153bX+0dd\1.af26959307253X+0e6\1.d9890bc68eeddX+0ef\1.1231831c6ccbdX+0f9\1.4e5b1c79769adX+102\1.acc2917790916X+10b\1.20bd5e935fc86X+115\1.97f9f572293ebX+11e\1.2e083516087a9X+128\1.d41e650690e84X+131\1.7b59a0f58ffb8X+13b\1.412709736939fX+145\1.1bc48bbc5cc50X+14f\1.0575ec3ab2234X+159\1.f5fe45963cac3X+162\1.f5abf07320dbaX+16c\1.04c0734d5322dX+177\1.19bdb7ca080b5X+181\1.3c2f25da2f119X+18b\1.704a6714a172bX+195\1.bcf2002532ee2X+19f\1.169855a5defafX+1aa\1.6963e57ed41dfX+1b4\1.e54fbbb872117X+1be\1.5125bc119ad89X+1c9\1.e4616e3d8d09aX+1d3\1.679a15f64d5a9X+1de\1.13c15fcb28309X+1e9\1.b49d69397c7aaX+1f3\1.64abed86e0175X+1fe\1.2c8197ead1271X+209\1.05015c2200ecfX+214\1.d32f2c47ba10cX+21e\1.aea4c26df15f6X+229\1.98adca0fa6ca5X+234\1.8f1dcfb3cd633X+23f\1.90f42af6fe074X+24a\1.9e2f8a971c6f1X+255\1.b7c7b687b5bb6X+260\1.dfcb00aa4c2cfX+26b\1.0cd20cf8a2e4dX+277\1.354a937fa88e0X+282\1.6d400c144ce9eX+28d\1.ba92b59047eb7X+298\1.13079715a5f66X+2a4\1.5e8194cdc3f82X+2af\1.c9e5d8fd49582X+2ba\1.32811f8ce591dX+2c6\1.a45eae570d41eX+2d1\1.273c29596492dX+2dd\1.a89a664a7f630X+2e8\1.3888d893937f4X+2f4\1.d6d21fe9b4fb0X+2ff\1.6acfec47defa2X+30b\1.1df41024fe6a3X+317\1.cce916a2f02f1X+322\1.7bbbe1e92e94bX+32e\1.3fbfc0ec34e1dX+33a\1.131bca925b254X+346\1.e39bd06647752X+351\1.b221ac47c86e0X+35d\1.8df13eed18d1cX+369\1.746394821e395X+375\1.63ae13ac3b025X+381\1.5aabe04f8c67bX+38d
+  Bdiv4i = B / 4i
 
   f = J($UAbadSesma_N,1,1)
   g = J($UAbadSesma_N,1,C(1))
   dfdnu = J($UAbadSesma_N,1,0)
   dgdlnz = J($UAbadSesma_N,1,C(0))
+  lns = ln(1::$UAbadSesma_N)
 }
 
 void clsUAbadSesma::setalpha(complex rowvector _alpha) {
@@ -972,9 +974,13 @@ void clsUAbadSesma::setz(real scalar _z, real scalar _lnz) {
 }
 
 complex rowvector clsUAbadSesma::lnU(real scalar mini, real scalar todo, | complex rowvector dlnUdalpha, complex rowvector dlnUdnu, complex rowvector dlnUdlnz) {
-  real colvector j; complex scalar Karg, Karg2, lnKarg, lnnegiz, _combfg; real scalar s, _cross, _comb, onemhalfbeta; complex matrix terms
-  complex rowvector denom, dlnKdnuL1, dlnKdlnargL1, dlnKdnuL2, dlnKdlnargL2, retval; complex colvector _g, dlnargdalpha, dlnargdnu, _combf
-  pointer (complex rowvector) scalar pK, pKL1, pKL2, pdlnKdnu, pdlnKdlnarg, pdlnKdnuL1, pdlnKdlnargL1, pdlnKdnuL2, pdlnKdlnargL2
+  real colvector j
+  complex scalar Karg, Karg2, lnKarg, lnKarg2, lnnegiz, _term, _combfg, _combB
+  real scalar s, _cross, _comb, onemhalfbeta, twonupsm1
+  complex matrix terms
+  complex rowvector denom, dlnKdnuL1, dlnKdlnargL1, dlnKdnuL2, dlnKdlnargL2, retval
+  complex colvector _g, dlnargdalpha, dlnargdnu, _combf
+  pointer (complex rowvector) scalar pK, pKL1, pKL2, pdlnKdnu, pdlnKdlnarg, pdlnKdnuL1, pdlnKdlnargL1, pdlnKdnuL2, pdlnKdlnargL2, pKdlnKdnuL1, pKdlnKdnuL2, pKdlnKdlnargL1, pKdlnKdlnargL2
   pragma unset dlnKdnuL1; pragma unset dlnKdlnargL1; pragma unset dlnKdnuL2; pragma unset dlnKdlnargL2
 
   if (nuDirty) {
@@ -989,15 +995,17 @@ complex rowvector clsUAbadSesma::lnU(real scalar mini, real scalar todo, | compl
     nuDirty = 0
   }
 
-  lnnegiz = -1.921fb54442d18X+000i /*log -i*/ + lnz
-  Karg = sqrt(Karg2 = (4 * (*palpha)[|mini+1\.|] :- 2 * beta) * z); lnKarg = ln(Karg)
+  Karg = sqrt(Karg2 = (4 * (*palpha)[|mini+1\.|] :- 2 * beta) * z); lnKarg = ln(Karg); lnKarg2 = lnKarg + lnKarg
   pKL2 = &S.lnK(nu, Karg, lnKarg, todo, dlnKdnuL2, dlnKdlnargL2)
   (terms = J($UAbadSesma_N, cols(Karg), C(.)))[1,] = *pKL2  // actually ln(K_nu)
   pKL2 = &exp(*pKL2)
 
   if (todo) {
-    pdlnKdnuL2    = &dlnKdnuL2
-    pdlnKdlnargL2 = &dlnKdlnargL2
+    pdlnKdnuL2     = &dlnKdnuL2
+    pdlnKdlnargL2  = &dlnKdlnargL2
+    pKdlnKdnuL2    = &(*pKL2 :* *pdlnKdnuL2   )
+    pKdlnKdlnargL2 = &(*pKL2 :* *pdlnKdlnargL2)
+
   	dlnargdnu = -.5 * (dlnargdalpha = 1 :/ (2 * (*palpha)[|mini+1\.|] :- beta))
   	// dlnargdnlz = .5
     (dlnUdalpha = terms)[1,] =             dlnKdlnargL2 :* dlnargdalpha
@@ -1005,15 +1013,18 @@ complex rowvector clsUAbadSesma::lnU(real scalar mini, real scalar todo, | compl
     (dlnUdlnz   = terms)[1,] =             dlnKdlnargL2  * .5
   }
 
-  // unrolling loop below for s=1
+  // unroll loop below for s=1, to prep for recurrence relation
   g[2] = z * -1.5555555555555X-003i
   pKL1 = &S.lnK(beta, Karg, lnKarg, todo, dlnKdnuL1, dlnKdlnargL1)
   terms[2,] = (lnz + lnz -1.cab0bfa2a2002X+000+1.921fb54442d18X+001i /*ln(-1/6)*/) :+ *pKL1  // update lnK using recurrence relation; *pkL1 is actually ln(K_nu)
   pKL1 = &exp(*pKL1)
   
   if (todo) {
-    pdlnKdnuL1    = &dlnKdnuL1
-    pdlnKdlnargL1 = &dlnKdlnargL1
+    pdlnKdnuL1     = &dlnKdnuL1
+    pdlnKdlnargL1  = &dlnKdlnargL1
+    pKdlnKdnuL1    = &(*pKL1 :* *pdlnKdnuL1   )
+    pKdlnKdlnargL1 = &(*pKL1 :* *pdlnKdlnargL1)
+
     dgdlnz[2] = g[2]
     dlnUdalpha[2,] =                          dlnKdlnargL1 :* dlnargdalpha
     dlnUdnu   [2,] = dfdnu[1] :+ (dlnKdnuL1 + dlnKdlnargL1 :* dlnargdnu   )
@@ -1021,29 +1032,38 @@ complex rowvector clsUAbadSesma::lnU(real scalar mini, real scalar todo, | compl
   }
 
   j = 0
+  _term = lnnegiz = -1.921fb54442d18X+000i /*log -i*/ + lnz
+  twonupsm1 = nu + nu
+  _comb = 1
   for (s=2;s<$UAbadSesma_N;s++) {
-    g[s+1] = -.25i * (z * ((_comb = comb(s-1, 2*j) :* B[j:+1]) ' g[s:-2*j]))
+  	twonupsm1++
+
+    g[s+1] = z * ((_combB = _comb :* Bdiv4i[j:+1]) ' g[s:-2*j])
     if (todo)
-      dgdlnz[s+1] = g[s+1] - .25i * (z * (_comb ' dgdlnz[s:-2*j]))
-    j = 0 :: floor(s * .5)
-    pK = &(ln(denom = *pKL2 + 2*(nu+s-1) * *pKL1) - 2 * lnKarg)  // recurrence relation for K_nu(z)/z^nu; pK is actually ln(K_nu)
-    terms[s+1,] = (s * lnnegiz - lngamma(s+1) + ln(_combfg = (_combf = (_comb=comb(s, 2*j)) :* f[j:+1]) ' (_g = g[(s+1):-2*j]))) :+ *pK  // compute lnK(nu+s, Karg) using recurrence relation for K()
+      dgdlnz[s+1] = g[s+1] + z * (_combB ' dgdlnz[s:-2*j])
+
+    j = 0 :: s * .5  // equivalent to j = 0::floor(s/2)
+    _comb = comb(s, 2*j)
+    pK = &(ln(denom = *pKL2 + twonupsm1 * *pKL1) - lnKarg2)  // recurrence relation for K_nu(z)/z^nu; pK is actually ln(K_nu)
+    terms[s+1,] = *pK :+ ((_term = _term + lnnegiz - lns[s]) + ln(_combfg = (_combf = _comb :* f[j:+1]) ' (_g = g[(s+1):-2*j])))  // compute lnK(nu+s, Karg) using recurrence relation for K()
     pK = &(denom :/ Karg2)
 
     if (todo) {
-      pdlnKdnu    = &((*pKL2 :* *pdlnKdnuL2    + 2*(nu+s-1) * *pKL1 :* (*pdlnKdnuL1    :+ 2)) :/ denom     )  // derivative recurrence relations for K_nu(z)/z^nu
-      pdlnKdlnarg = &((*pKL2 :* *pdlnKdlnargL2 + 2*(nu+s-1) * *pKL1 :*  *pdlnKdlnargL1      ) :/ denom :- 2)
+      pdlnKdnu    = &((*pKdlnKdnuL2    + twonupsm1 * *pKdlnKdnuL1    + *pKL1 + *pKL1) :/ denom     )  // derivative recurrence relations for K_nu(z)/z^nu
+      pdlnKdlnarg = &((*pKdlnKdlnargL2 + twonupsm1 * *pKdlnKdlnargL1                ) :/ denom :- 2)
 
     	dlnUdalpha[s+1,] =                                                                               *pdlnKdlnarg :* dlnargdalpha
     	dlnUdnu   [s+1,] = ((    _comb :* dfdnu[j:+1]) ' _g                ) :/ _combfg  :+ (*pdlnKdnu + *pdlnKdlnarg :* dlnargdnu   )
       dlnUdlnz  [s+1,] = (s + (_combf                ' dgdlnz[(s+1):-2*j]) :/ _combfg) :+              *pdlnKdlnarg :* .5
 
-      pdlnKdnuL2    = pdlnKdnuL1     // forward shifts for recurrence calculation
-      pdlnKdnuL1    = pdlnKdnu
-      pdlnKdlnargL2 = pdlnKdlnargL1
-      pdlnKdlnargL1 = pdlnKdlnarg
+      pdlnKdnuL2     = pdlnKdnuL1     // forward shifts for recurrence calculation
+      pdlnKdnuL1     = pdlnKdnu
+      pdlnKdlnargL2  = pdlnKdlnargL1
+      pdlnKdlnargL1  = pdlnKdlnarg
+      pKdlnKdnuL2    = pKdlnKdnuL1
+      pKdlnKdnuL1    = &(*pKL1 :* *pdlnKdnuL1   )
+      pKdlnKdlnargL1 = &(*pKL1 :* *pdlnKdlnargL1)
     }
-
     pKL2 = pKL1  // forward shifts for recurrence calculation
     pKL1 = pK
   }
@@ -1054,6 +1074,7 @@ complex rowvector clsUAbadSesma::lnU(real scalar mini, real scalar todo, | compl
     dlnUdlnz = dlnUdlnz :+ z*.5                                            
   } else
     retval = asdfLogSumExpc(terms)
+
   return(retval :+ (beta * 1.62e42fefa39efX-001 /*ln(2)*/ + z*.5 - lngamma(-nu)))
 }
 
@@ -1277,6 +1298,7 @@ real colvector clsStickyFeller::lnStickyFeller(real scalar lna, real scalar b, r
         }
       }
 		}
+
     if (todo) {
       dphidb  = dphidalpha :* lambda /(-b * absb) :+ dphidlnz / b  // from partial to total derivatives 
       dphidnu = (b < 0? dphidnu : dphidalpha + dphidnu)
